@@ -1,0 +1,18 @@
+*.pyc
+*.so
+*~
+*.swp
+Debug/
+backup/
+.vs/
+.vscode/
+*.user
+*.bak
+lib/
+*.d
+*.o
+
+
+# 以“_”开头的名字不包含在项目中，用于自定义目录。
+__pycache__*
+
