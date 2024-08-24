@@ -10,6 +10,9 @@ from collections import namedtuple, defaultdict
 from create_consensus_by_bed.Utils import Run_for_denovo, Record, write_reg_to_bed, make_dir, run_cmd_ls, DepthRec, Asm_Region
 from create_consensus_by_bed import fasta_parser
 
+'''
+特殊情况：supp比primary比对的更好，应该选supp作为填充读数
+'''
 # from Utils import Run_for_denovo, Record, write_reg_to_bed, make_dir, run_cmd_ls
 # import fasta_parser
 ## 
@@ -27,7 +30,11 @@ class denovo_info():
     def write_info(info_ls, fout):
         with open(fout, "w") as f:
             for info in info_ls:
-                f.write("{}\t{}\t{}\t{}\n".format(info.chr_id, info.start, info.end, ",".join(info.reg_ctg_ls)))
+                if len(info.reg_ctg_ls) == 0:
+                    f.write("{}\t{}\t{}\tfailed_asm\n".format(info.chr_id, info.start, info.end, ",".join(info.reg_ctg_ls)))
+                    pass
+                else:
+                    f.write("{}\t{}\t{}\t{}\n".format(info.chr_id, info.start, info.end, ",".join(info.reg_ctg_ls)))
 
 def can_solve_bound(rec):
     if rec.operation != "asm_patch":
@@ -113,11 +120,16 @@ def get_info_op(candidate_ls, asm_fa_dic, direction, target_pos): #
     '''
     # print(candidate_ls, direction, target_pos)
     ## get_best_ctg
+    '''
+    选出最佳填充contig
+    1、与原始ref交叠长度
+    2、与原始ref交叠部分相似度，好像多此一举
+    '''
     best_ctg = None
     for ctg in candidate_ls:    # 对候选ctg作过滤，加上对clip的限制，和长度的限制
         if best_ctg != None:
             if ctg.query_alignment_length > best_ctg.query_alignment_length:
-                best_ctg = ctg
+                best_ctg/= ctg
         else:
             best_ctg = ctg
     ## get info op
@@ -293,6 +305,9 @@ def get_rec_by_asm(ctg, bam_in, candidate_op_ls, asm_fa_dic, process_id_set, app
             rec.add_operation("reads_patch")
             final_op_ls.append(rec)
             # logger.info("{}:{}-{} reads_patch".format(rec.chr_id, rec.start, rec.end))
+        elif rec.operation.endswith("skip"):
+            final_op_ls.append(rec)
+            print("Skip:{}:{}-{}".format(rec.chr_id, rec.start, rec.end))
         elif rec.operation.endswith("patch"):
             final_op_ls.append(rec)
             logger.info("{}:{}-{}, {}".format(rec.chr_id, rec.start, rec.end, rec.operation))
@@ -376,6 +391,7 @@ def get_rec_by_asm(ctg, bam_in, candidate_op_ls, asm_fa_dic, process_id_set, app
 
 ###########
 ## 
+@DeprecationWarning
 def select_reads_from_names2(fastq_in, out_dir, read_ids, threads):
     ## 使用seqkit实现 
     '''seqkit grep -f id.txt -j threads seqs.fq.gz -o result.fq.gz'''
@@ -398,7 +414,7 @@ def select_reads_from_names(fastq_in, fastq_out, read_ids, threads):
     t0 = time.time()
     cmd = ["seqtk", "subseq", fastq_in, read_ids, ">", fastq_out] 
     subprocess.check_call(" ".join(cmd), shell=True)
-    print("Get fastq done, cost{}s".format(time.time() - t0))
+    print("Get fastq done, cost:{}s".format(time.time() - t0))
     return fastq_out
 
 def select_reads_from_names3(fastq_in, out_dir, asm_reg:Asm_Region, part, threads):
@@ -464,6 +480,20 @@ def is_abnormal_ctg(dpinfo, params):
     min_cov_ratio, dp_upper_bound, dp_lower_bound = params["min_cov_ratio"], params["dp_upper_bound"], params["dp_lower_bound"]
     if dpinfo["cov_ratio"] < min_cov_ratio or dpinfo["chr_avg_dp"] / dpinfo["whole_dp"] < dp_lower_bound or dpinfo["chr_avg_dp"] / dpinfo["whole_dp"] > dp_upper_bound:
         return True
+    return False
+
+def filter_empty_ctg(whole_ctg_asm_reg_ls, reg_read_ids_dic):
+    ls = []
+    for reg in whole_ctg_asm_reg_ls:
+        if is_empty_reg(reg, reg_read_ids_dic):
+            print("Empty ctg: {}".format(reg))
+        else:
+            ls.append(reg)
+    return ls
+def is_empty_reg(reg, reg_read_id_dic):
+    reg_id = reg_to_id(reg)
+    reg_reads_ids = reg_read_id_dic[reg_id]
+    if len(reg_reads_ids) == 0: return True
     return False
 
 def judge_(rec_ls, read: pysam.AlignedSegment):
@@ -602,6 +632,9 @@ def run_reg_denovo(region_ls, out_dir, reg_read_id_dic, candidate_op_dic, fastq_
         elif dp_ls[idx][0] / Depthrec_dic[reg[0]].whole_dp > dp_upper_bound or dp_ls[idx][1] / Depthrec_dic[reg[0]].whole_dp > block_high_dp_bound:
             print("Too high dp reg: {}, avg_dp: {}, block_high_dp: {}".format(reg, dp_ls[idx][0], dp_ls[idx][1]))
             failed_reg_ls.append(reg)
+        elif is_empty_reg(reg, reg_read_id_dic):
+            print("Empty reg: {}".format(reg))
+            failed_reg_ls.append(reg)
         else:   # 剩下的区间，用于reg denovo
             ls1.append(reg)
             process_regid_set.add(reg_to_id(reg))
@@ -734,12 +767,16 @@ def run_ctg_denovo(reg_ls, out_dir, reg_read_id_dic, fastq_in, reference, thread
     
     ### get reads
     t1 = time.time()
-    pool = Pool(processes=threads)
-    for task in task_ls:
-        pool.apply_async(select_reads_from_names, args=(fastq_in, task[2], task[3], 1))
-    pool.close() # 关闭进程池，表示不能再往进程池中添加进程，需要在join之前调用
-    pool.join() # 等待进程池中的所有进程执行完毕
-    print("Extract reg read done, cost {}s".format(time.time() - t1))
+    try:
+        if len(reg_ls) != 0:
+            pool = Pool(processes=threads)
+            for task in task_ls:
+                pool.apply_async(select_reads_from_names, args=(fastq_in, task[2], task[3], 1))
+            pool.close() # 关闭进程池，表示不能再往进程池中添加进程，需要在join之前调用
+            pool.join() # 等待进程池中的所有进程执行完毕
+    except:
+        raise("run_ctg_denovo get reads failed!!!")
+    print("Extract ctg read done, cost {}s".format(time.time() - t1))
 
     ### assembly
     fa_dic = {}
@@ -785,20 +822,23 @@ def run_ctg_denovo(reg_ls, out_dir, reg_read_id_dic, fastq_in, reference, thread
     denovo_info.write_info(ctg_denovo_info_ls, ctg_denovo_info_f)
     fasta_parser.write_fasta_dict(fa_dic, ctg_denovo_fa)
     print("Ctg denovo asm Done, cost {}s".format(time.time() - t0))
-    ### mapping
-    bam_out = out_dir + "/ctg_to_ref.sort.bam"
-    minimap2_cmd_ls = ["minimap2", "-ax", "asm20", "-t", str(threads), reference, ctg_denovo_fa, \
-        "|", "samtools", "sort", "-O", "BAM", "-@", str(threads), "-o", bam_out, \
-        "&&", "samtools index -@", str(threads), bam_out] 
-    run_cmd_ls(minimap2_cmd_ls)
+    
     ### filter
-    ctg_ls = [reg[0] for reg in reg_ls]
+    
     if config["apply_contig_filter"]:
+        ctg_ls = [reg[0] for reg in reg_ls]
+        ### mapping
+        bam_out = out_dir + "/ctg_to_ref.sort.bam"
+        minimap2_cmd_ls = ["minimap2", "-ax", "asm20", "-t", str(threads), reference, ctg_denovo_fa, \
+            "|", "samtools", "sort", "-O", "BAM", "-@", str(threads), "-o", bam_out, \
+            "&&", "samtools index -@", str(threads), bam_out] 
+        run_cmd_ls(minimap2_cmd_ls)
         filtered_fa_dic = filter2(ctg_ls, fa_dic, bam_out, config["contig_filter"])
+        filter_ls = filtered_fa_dic.keys()
+        print("Filter from: {} \n-> {}".format(fa_dic.keys(), filter_ls))
     else:
         filtered_fa_dic = fa_dic
-    filter_ls = filtered_fa_dic.keys()
-    print("Filter from: {} \n-> {}".format(fa_dic.keys(), filter_ls))
+    
     return filtered_fa_dic
 
 def run_merge_local_denovo(reg_ls, asm_ctg_ls, out_dir, reg_read_id_dic, fastq_in, unmapped_fq, reference, threads, data_type, config):
@@ -828,6 +868,9 @@ def run_merge_local_denovo(reg_ls, asm_ctg_ls, out_dir, reg_read_id_dic, fastq_i
     logger.info("Apply merge local denovo on: {}".format(merge_local_reg_ls))
     
     merge_denovo_asm_out = Run_for_denovo(merge_denovo_fq, out_dir, threads, genome_size, data_type, config)
+    if merge_denovo_asm_out == None:    # 组装失败
+        print("Merge Assembly failed, Done")
+        exit(0)
     fa_dic = fasta_parser.read_sequence_dict(merge_denovo_asm_out)
     ## mapping
     logger.info("****************** map denovo asm to reference start ******************")

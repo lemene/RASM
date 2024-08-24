@@ -102,17 +102,20 @@ class Depth_info():
                 ## 
                 dp_info_dic[ctg_info_dic["chr_id"]] = ctg_info_dic
         return dp_info_dic
-
+    @staticmethod
+    def func():
+        return
 
 def get_Depth_info(chr_id, chr_len, dp_ls, dp_win_size, block_size, whole_dp):
     return Depth_info(chr_id, chr_len, dp_ls, dp_win_size, block_size, whole_dp)
 
 
-def run_mosdepth2(ctg, bam_in, out_dir, DP_WIN_SIZE, threads):
-    min_MQ = 20
+def run_mosdepth2(ctg, bam_in, out_dir, DP_WIN_SIZE, threads, min_MQ):
+    # min_MQ = 20
     # DP_WIN_SIZE = 100
     prefix = out_dir+"/"+ctg
-    cmd = ["mosdepth", "-Q", str(min_MQ), "-b", str(DP_WIN_SIZE), "-t", str(threads), "-c", ctg, prefix, bam_in]    # mosdepth -b 100 test/NC_19 ../step1_mapping/aln.sorted.BAM      # 指定winsize
+    ## -n -x 用于缩短时间
+    cmd = ["mosdepth", "-Q", str(min_MQ), "-b", str(DP_WIN_SIZE), "-t", str(threads), "-c", ctg, "-n", prefix, bam_in]    # mosdepth -b 100 test/NC_19 ../step1_mapping/aln.sorted.BAM      # 指定winsize
     print("Running: %s", " ".join(cmd))
     subprocess.check_call(" ".join(cmd), shell=True)
     print("Run {} done".format(ctg))
@@ -121,7 +124,8 @@ def read_mosdepth_dp_file(dp_file):
     '''best for ctg dp file'''
     dp_ls = []
     with gzip.open(dp_file, "rt") as f:
-        for line in f:
+        lines = f.readlines()
+        for line in lines:
             fields = line.strip().split("\t")
             dp = float(fields[3])
             dp_ls.append(dp)
@@ -137,16 +141,17 @@ def run_mosdepth(ctg, bam_in, out_dir, DP_WIN_SIZE):
     subprocess.check_call(" ".join(cmd), shell=True)
     print("Run {} done".format(ctg))
 
-def get_dp(ctg, bam_in, ctg_out_dir, DP_WIN_SIZE):
+def get_dp(ctg, bam_in, ctg_out_dir, DP_WIN_SIZE, min_MQ):
     '''per ctg'''
     if not os.path.isdir(ctg_out_dir):os.makedirs(ctg_out_dir)
     dp_out_file = ctg_out_dir+"/"+ctg + ".regions.bed.gz"
     ## 
-    run_mosdepth2(ctg, bam_in, ctg_out_dir, DP_WIN_SIZE, 3)
+    run_mosdepth2(ctg, bam_in, ctg_out_dir, DP_WIN_SIZE, 4, min_MQ)
     dp_ls = read_mosdepth_dp_file(dp_out_file)
     return {ctg: dp_ls}     # 返回一个字典存储
 
-def get_dp_info_parallel(bam_in, threads, out_dir, DP_WIN_SIZE, Block_size):
+def get_dp_info_parallel(bam_in, threads, out_dir, DP_WIN_SIZE, Block_size, min_MQ):
+    print("----------------get_dp_info_parallel----------------")
     dp_file_dir = os.path.join(out_dir, "depths")
     dp_info_dir = os.path.join(out_dir, "dp_info")
     if not os.path.isdir(dp_file_dir):os.makedirs(dp_file_dir)
@@ -155,7 +160,7 @@ def get_dp_info_parallel(bam_in, threads, out_dir, DP_WIN_SIZE, Block_size):
     ctg_ls = bam_reader.references
     dp_dic = {}
     pool = Pool(processes=threads)
-    results = [pool.apply_async(get_dp, args=(ctg, bam_in, dp_file_dir + "/" + ctg, DP_WIN_SIZE)) for ctg in ctg_ls]
+    results = [pool.apply_async(get_dp, args=(ctg, bam_in, dp_file_dir + "/" + ctg, DP_WIN_SIZE, min_MQ)) for ctg in ctg_ls]
     pool.close() # 关闭进程池，表示不能再往进程池中添加进程，需要在join之前调用
     pool.join() # 等待进程池中的所有进程执行完毕
     for res in results:
@@ -164,7 +169,7 @@ def get_dp_info_parallel(bam_in, threads, out_dir, DP_WIN_SIZE, Block_size):
     whole_dp_ls = []
     for ctg, ctg_dp_ls in dp_dic.items():
         whole_dp_ls.extend(ctg_dp_ls)
-    whole_dp = np.median(whole_dp_ls)   # 全局的dp
+    whole_dp = np.median(whole_dp_ls)   # 全局的dp，使用中位数表示
     print("Whole dp: {} !!!".format(whole_dp))
     ## 
     dpinfo_dic = {}
@@ -185,10 +190,17 @@ def get_dp_info_parallel(bam_in, threads, out_dir, DP_WIN_SIZE, Block_size):
         dpinfo_dic[ctg_dpinfo.chr_id] = ctg_dpinfo
     
     dp_info_file = dp_info_dir + "/" + "dpinfo.bed"
+    quantile_ls = []
+    num = 1000
+    for i in range(num):
+        quantile_ls.append(i * (1 / num))
     with open(dp_info_dir + "/" + "whole_dpinfo_sum.bed", "w")as f:
         f.write("avg_dp:{}\n".format(np.average(whole_dp_ls)))
-        ls = np.quantile(whole_dp_ls, [0.05, 0.25, 0.5, 0.75, 0.95])
-        f.write("0.05, 0.25, 0.5, 0.75, 0.95: {}\n".format(ls))
+        # ls = np.quantile(whole_dp_ls, [0.05, 0.25, 0.5, 0.75, 0.95])
+        # f.write("0.05, 0.25, 0.5, 0.75, 0.95: {}\n".format(ls))
+        ls = np.quantile(whole_dp_ls, quantile_ls)
+        for i in range(len(quantile_ls)):
+            f.write("{}:{}\n".format(quantile_ls[i], ls[i]))
     Depth_info.write_dp_info(dpinfo_dic, dp_info_file)
     return dpinfo_dic
 

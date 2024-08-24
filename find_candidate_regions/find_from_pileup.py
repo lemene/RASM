@@ -130,12 +130,16 @@ def write_pileup_dic(window_pileup_dict, f_out):
     data=pd.DataFrame(window_pileup_dict)
     data.to_csv(f_out, sep="\t", index=False)
 
-def parse_reg_pileup(ctg, reg_start, reg_end, ref, bam, out_dir, params):
+def parse_reg_pileup(ctg, reg_start, reg_end, ref, bam, out_dir, params, data_type):
     ''' cal pileup data of a window'''
     t1 = time.time()
-    win_size, step_size, min_correct_portion, max_differ_portion, max_disagree_portion, cluster_dis \
-        = params["win_size"], params["step_size"], params["min_correct_portion"], \
-        params["max_differ_portion"], params["max_disagree_portion"], params["cluster_dis"]
+    
+    win_size, step_size, cluster_dis = params["win_size"], params["step_size"], params["cluster_dis"]
+    if data_type == "ont":
+        min_correct_portion, max_differ_portion, max_disagree_portion = params['ont']["min_correct_portion"], params['ont']["max_differ_portion"], params['ont']["max_disagree_portion"]
+    elif data_type == 'hifi':
+        min_correct_portion, max_differ_portion, max_disagree_portion = params['hifi']["min_correct_portion"], params['hifi']["max_differ_portion"], params['hifi']["max_disagree_portion"]
+
     print("{}:{}-{}".format(ctg, reg_start, reg_end))
     region = ctg + ":" + str(reg_start) + "-" + str(reg_end - 1)
     # pileup_file = os.path.join(out_dir, region + "pileup.txt")
@@ -216,9 +220,9 @@ def call_back(res):
     print(res)
 def error_call_back(error_code):
     # return
-    print(error_code)
+    print("error: ", error_code)
 
-def parse_pileup_parallel(ctg_ls, ref, bam_in, threads, params, out_dir):
+def parse_pileup_parallel(ctg_ls, ref, bam_in, threads, params, out_dir, data_type):
     # 
     print("Start pileup parse!!!")
     print("pileup_params: {}".format(params))
@@ -239,7 +243,7 @@ def parse_pileup_parallel(ctg_ls, ref, bam_in, threads, params, out_dir):
             reg_end = i + reg_size if i + reg_size <= ctg_len else ctg_len
             # task_ls.append([ctg, reg_start, reg_end])
             # print("{}:{}-{}".format(ctg, reg_start, reg_end))
-            pool.apply_async(parse_reg_pileup, args=(ctg, reg_start, reg_end, ref, bam_in, reg_out_dir, params))
+            pool.apply_async(parse_reg_pileup, args=(ctg, reg_start, reg_end, ref, bam_in, reg_out_dir, params, data_type))
     pool.close() # 关闭进程池，表示不能再往进程池中添加进程，需要在join之前调用
     pool.join() # 等待进程池中的所有进程执行完毕
     ## 合并所有数据

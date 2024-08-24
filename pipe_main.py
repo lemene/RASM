@@ -18,7 +18,8 @@ import yaml
 from find_candidate_regions.find_candidate_regions import run_find_candidate_parallel, run_find_candidate2_parallel
 from create_consensus_by_bed.get_fasta_consensus2 import run_SVconsensus_parallel
 from create_consensus_by_bed import fasta_parser, scaffold_by_rec, Utils
-
+from mis_find.find_mis_pipe import run_find_pipe
+import info_stats
 logger = logging.getLogger()
 def _enable_logging(log_file, debug, overwrite):
     """
@@ -62,17 +63,26 @@ def run_minimap2(target_fa, query_fa, data_type, threads, minimap_out, params_ls
     ''' 运行minimap2 提供params '''
     t1 = time.time()
     params = " ".join([str(param) for param in params_ls])
-    minimap_cmd = ["minimap2", "-ax", "map-"+data_type, params, target_fa, query_fa, "-t", str(threads), ">", minimap_out]
+    minimap_cmd = ["/usr/bin/time -v minimap2", "-ax", "map-"+data_type, params, target_fa, query_fa, "-t", str(threads), ">", minimap_out]
     logger.info("Running: %s", " ".join(minimap_cmd))
     subprocess.check_call(" ".join(minimap_cmd), shell=True)
     logger.info("Run minimap2 finished, cost {}s".format(time.time() - t1))
 
 def run_samtools(sam_in, samtools_out, threads):
     t1 = time.time()
-    samtools_cmd = ["samtools", "sort", "-O", "BAM", "-@", str(threads), sam_in, "-o", samtools_out, "&&", "samtools", "index", "-@", str(threads), samtools_out]
+    samtools_cmd = ["/usr/bin/time -v samtools", "sort", "-O", "BAM", "-@", str(threads), sam_in, "-o", samtools_out, "&&", "samtools", "index", "-@", str(threads), samtools_out]
     logger.info("Running: %s", " ".join(samtools_cmd))
     subprocess.check_call(" ".join(samtools_cmd), shell=True)
     logger.info("Run samtools finished, cost {}s".format(time.time() - t1))
+
+def generate_bam(target_fa, query_fa, data_type, threads, bam_out, params_ls):
+    ''' 运行minimap2 提供params，输出sorted bam '''
+    t1 = time.time()
+    params = " ".join([str(param) for param in params_ls])
+    minimap_cmd = ["/usr/bin/time -v minimap2", "-ax", "map-"+data_type, params, target_fa, query_fa, "-t", str(threads), "|", "samtools", "sort", "-O", "BAM", "-@", str(threads), "-o", bam_out, "&&", "samtools", "index", "-@", str(threads), bam_out]
+    logger.info("Running: %s", " ".join(minimap_cmd))
+    subprocess.check_call(" ".join(minimap_cmd), shell=True)
+    logger.info("Run minimap2 and samtools finished, cost {}s".format(time.time() - t1))
 
 
 def main():
@@ -88,9 +98,9 @@ def main():
     parser.add_argument("--work-dir", dest="work_dir", required=True, help="work directory to output results")
     # parser.add_argument("--bam", dest="bam_in", required=True, help="bam file")
     parser.add_argument("--ref", dest="ref", required=True)
-    parser.add_argument("--fastq", dest="fastq_in", required=True, help="fastq reads file")
+    parser.add_argument("--fastq", dest="fastq", required=True, help="fastq reads file")
     ## 
-    parser.add_argument("--data-type", dest="data_type", required=True, choices=["ont", "hifi"], help="fastq file type")
+    parser.add_argument("--data-type", dest="data_type", required=True, choices=["ont", "hifi", "pb"], help="fastq file type")
     parser.add_argument("-g", "--genome-size", dest="genome_size", default="100m", help="genome size end with: b,m,g")
     ### 性能参数
     parser.add_argument("--min_clip_num", dest="min_clip_num", default=5, help="min_clip_num of window to be selected") # important
@@ -99,7 +109,7 @@ def main():
     parser.add_argument("--min-dep", dest="min_dep", default=10, help="dep threshold to be select as low dep region")
     parser.add_argument("--max-dep", dest="max_dep", default=48, help="max dep threshold")  # ->后面改为随由平均cov来计算 (1.7 * avg cov)
     parser.add_argument("--min-dep-reg", dest="min_dep_reg", default=100, help="minimum length of low dep region")
-    parser.add_argument("--min-contig", dest="min_contig", help="skip SV consensus process contig shorter than this, keep with raw", default=100, type=int)   # 200000 调 1,000,000     5,000,000
+    parser.add_argument("--min-contig", dest="min_contig", help="skip SV consensus process contig shorter than this, keep with raw", default=20000, type=int)   # 200000 调 1,000,000     5,000,000
     parser.add_argument("--fill-size", dest="Nfill_size", type=int, default=100, help="N_fill_size")
     # 区间聚类和延展参数
     # parser.add_argument("--cluster-params", dest="cluster_params")
@@ -111,9 +121,23 @@ def main():
     ## 
     parser.add_argument("--overwrite", dest="overwrite", default=False, action="store_true", help="overwrites all existing results")
     parser.add_argument("-R", dest="re_run", choices=["step1", "step2", "step3", "step4", "step5"], default=False, help="re_run step")
+    ## 1、mis find mode
+    parser.add_argument("--find_mis", dest="find_mis", default=False, action="store_true", help="Start find mode")
+    parser.add_argument("--min_span", dest="min_span", type=int, default=5)
+    # parser.add_argument("--boundary", dest="boundary", default=3000, type=int)
+    parser.add_argument("--bam", dest="bam")
+    ## 2、correct mode。纠错模式？？？
+    parser.add_argument("--correct", dest="correct", default=False, action="store_true")
+    parser.add_argument("--min_corr_len", dest="min_corr_len", type=int, default=500000)
+    parser.add_argument("--skip_denovo", dest="skip_denovo", default=False, action="store_true")
+    parser.add_argument("--cut", dest="cut", default=False, action="store_true")
+    # parser.add_argument("")
     ## 一些参数的配置文件
     parser.add_argument("--config", default='/public/home/hpc214712170/shixf/new_code/assembly/Test_code/resolve_err/Pipe/Configs/Config.yaml')
-    
+    ## 
+    parser.add_argument("--out_denovo", dest="out_denovo", default=False, help="Provide path to the denovo fa, for testing")
+
+    ##
     args = parser.parse_args()
     
 
@@ -121,7 +145,7 @@ def main():
     ### 绝对路径配置
     args.work_dir = os.path.abspath(args.work_dir)
     args.ref = os.path.abspath(args.ref)
-    args.fatsq = os.path.abspath(args.fastq_in)
+    args.fatsq = os.path.abspath(args.fastq)
     ### 生成文件路径配置
     work_dir = args.work_dir
     ref_dir = work_dir + "/" + "corrected_ref"
@@ -134,45 +158,67 @@ def main():
     config_dir = work_dir + "/" + "config"
     dp_file_dir = work_dir + "/" + "depths"
     for Dir in [work_dir, ref_dir, dp_file_dir, step1_dir, step2_dir, step3_dir, step4_dir, step5_dir, log_dir, config_dir]:
-        if not os.path.isdir(Dir):os.makedirs(Dir)
+        Utils.make_dir(Dir)
     ## log和文件检查
     assembly_log = os.path.join(log_dir, "assembly.log")
     _enable_logging(assembly_log, debug=False, overwrite=True)
-    if args.data_type not in ["ont", "hifi"]:
-        print("Reads type could be either 'ont' or 'hifi'", file=sys.stderr)
-        return 1
-    file_check(args.fastq_in)
+    if args.data_type not in ["ont", "hifi", "pb"]:
+        print("Reads type could be either 'ont' or 'hifi' or 'pb'", file=sys.stderr)
+        exit(1)
+        # return 1
+    
+    if args.find_mis or args.correct:
+        file_check(args.bam)
+    else:
+        file_check(args.fastq)
     file_check(args.ref)
-    ## 一些参数的获取，和对参考序列的处理
+    file_check(args.config)
+    ## 一些参数的获取
     with open(args.config, "r") as f: # config参数获取
         config = yaml.safe_load(f.read())     # 获取部分参数
         logger.info("Config参数设置: {}".format(config))
     config_save = os.path.join(config_dir, "WorkConfig.yaml")
     shutil.copy(args.config, config_save)
-    # 
-    ref_dic = fasta_parser.read_sequence_dict(args.ref)    # 参考序列字典
-    corrected_ref_dic = {}
-    ctg_ls = [] # 储存进行SV consensus 的contig
-    if args.all_chrs:
-        for chr_id,ref_seq in ref_dic.items():
-            corrected_ref_dic[chr_id] = ref_seq
-            if len(ref_seq) > args.min_contig:
-                ctg_ls.append(chr_id)
-    else:   # 只保留指定的contig
-        ls = args.ctg_ls.strip(",").split(",")
-        for chr_id in ls:
-            ref_seq = ref_dic.get(chr_id)
-            if not ref_seq: continue
-            corrected_ref_dic[chr_id] = ref_seq
-            if len(ref_seq) > args.min_contig:
-                ctg_ls.append(chr_id)
-    logger.info("corrected ref include:{}".format(corrected_ref_dic.keys()))
-    logger.info("You will SV consensus on:{}".format(",".join(ctg_ls)))
+    
+    ## 参考序列的处理
     corrected_ref = ref_dir + "/" + "reference.fasta"
-    fasta_parser.write_fasta_dict(corrected_ref_dic, corrected_ref)     # 写入新的参考基因组中
-    faidx_cmd = ["samtools faidx", corrected_ref]
-    subprocess.check_call(" ".join(faidx_cmd), shell=True)
+    if args.find_mis:
+        print("Find mis mode, Skip reference process")
+        if not os.path.isfile(args.ref + ".fai"):
+            pysam.faidx(args.ref)
+        # shutil.copy(args.ref, corrected_ref)
+        ctg_ls = []
+        with open(args.ref + ".fai", "r") as f:
+            for line in f:
+                chr = line.strip().split("\t")[0]
+                ctg_ls.append(chr)
+    else:
+        ref_dic = fasta_parser.read_sequence_dict(args.ref)    # 参考序列字典
+        corrected_ref_dic = {}
+        ctg_ls = [] # 储存进行SV consensus 的contig
+        if args.all_chrs:
+            for chr_id,ref_seq in ref_dic.items():
+                corrected_ref_dic[chr_id] = ref_seq
+                if len(ref_seq) > args.min_contig:
+                    ctg_ls.append(chr_id)
+        else:   # 只保留指定的contig
+            ls = args.ctg_ls.strip(",").split(",")
+            for chr_id in ls:
+                ref_seq = ref_dic.get(chr_id)
+                if not ref_seq: continue
+                corrected_ref_dic[chr_id] = ref_seq
+                if len(ref_seq) > args.min_contig:
+                    ctg_ls.append(chr_id)
+        logger.info("corrected ref include:{}".format(corrected_ref_dic.keys()))
+        logger.info("You will SV consensus on:{}".format(",".join(ctg_ls)))
+        fasta_parser.write_fasta_dict(corrected_ref_dic, corrected_ref)     # 写入新的参考基因组中
+        # index
+        faidx_cmd = ["samtools faidx", corrected_ref]
+        subprocess.check_call(" ".join(faidx_cmd), shell=True)
+        if len(ctg_ls) < 1:
+            exit(0)
 
+    ## 
     overwrite = args.overwrite
     re_run = args.re_run
     genome_size = convert_size(args.genome_size)
@@ -182,29 +228,62 @@ def main():
     
     ## step1 mapping 
     t1 = time.time()
-    minimap_out1 = os.path.join(step1_dir, "aln.sam")
-    samtools_out1 = os.path.join(step1_dir, "aln.sorted.bam")
-    if re_run == "step1": overwrite = True
-    if os.path.isfile(samtools_out1) and not overwrite:
-        logger.info("Skipped step1")
-    else:
-        logger.info("Run step1 mapping")
-        minimap2_params_ls1 = config["step1"]["minimap2_params_ls"]
-        # run_minimap(corrected_ref, args.fastq_in, args.data_type, args.threads, minimap_out1)
-        try:
-            run_minimap2(corrected_ref, args.fastq_in, args.data_type, args.threads, minimap_out1, minimap2_params_ls1)
-        except:
-            raise Exception("Run mapping minimap2 failed!!!")
-        try:
-            run_samtools(minimap_out1, samtools_out1, args.threads) # sam -> sorted.bam, and index
-            os.remove(minimap_out1)
-        except:
-            raise Exception("Run mapping samtools failed!!!")
+    if args.find_mis:   # 
+        print("Find mis mode, Skip mapping")
+        samtools_out1 = args.bam
         overwrite = True
-
+    else:
+        minimap_out1 = os.path.join(step1_dir, "aln.sam")
+        samtools_out1 = os.path.join(step1_dir, "aln.sorted.bam")
+        if re_run == "step1": overwrite = True
+        if os.path.isfile(samtools_out1) and not overwrite:
+            logger.info("Skipped step1")
+        else:
+            logger.info("Run step1 mapping")
+            minimap2_params_ls1 = config["step1"]["minimap2_params_ls"]
+            # run_minimap(corrected_ref, args.fastq, args.data_type, args.threads, minimap_out1)
+            try:
+                generate_bam(corrected_ref, args.fastq, args.data_type, args.threads, samtools_out1, minimap2_params_ls1)
+            except:
+                raise Exception("Run mapping minimap2 samtools failed!!!")
+            # try:
+            #     run_minimap2(corrected_ref, args.fastq, args.data_type, args.threads, minimap_out1, minimap2_params_ls1)
+            # except:
+            #     raise Exception("Run mapping minimap2 failed!!!")
+            # try:
+            #     run_samtools(minimap_out1, samtools_out1, args.threads) # sam -> sorted.bam, and index
+            #     os.remove(minimap_out1)
+            # except:
+            #     raise Exception("Run mapping samtools failed!!!")
+            overwrite = True
     
     ## step2 Find candidate regions
     t2 = time.time()
+    print("STEP1 cost: ", t2 - t1)
+
+    keep_ls = []
+    if args.correct or args.find_mis:   # filter out small contig
+        bam_reader = pysam.AlignmentFile(samtools_out1, "rb", index_filename=samtools_out1+".bai")
+        print("--------correct/find mis mode-------")
+        min_contig = args.min_contig
+        new_ctg_ls = []
+        for chr in ctg_ls:
+            if bam_reader.get_reference_length(chr) > min_contig:
+                new_ctg_ls.append(chr)
+            else:
+                keep_ls.append(chr)
+        print("We will corr/find mis on:{}".format(new_ctg_ls))
+        ctg_ls = new_ctg_ls
+    # find_mis mode
+    if args.find_mis:
+        # 1、mis find1
+        run_find_pipe(args.ref, samtools_out1, ctg_ls, step2_dir, args.threads, config["step2"])
+        # 2、some stats
+        print("Start stats")
+        ctg_ls = info_stats.simple_stats(args.ref, min_contig, step2_dir)
+        info_stats.get_qv(args.ref, args.bam, step2_dir, ctg_ls, args.threads)
+        return
+    # assembly mode
     candidate_bed = os.path.join(step2_dir, "candidate.bed")
     if re_run == "step2": overwrite = True
     if os.path.isfile(candidate_bed) and not overwrite:
@@ -213,13 +292,15 @@ def main():
         logger.info("Run step2 Find candidate regions")
         # run_find_candidate_parallel(samtools_out1, ctg_ls, step2_dir, dp_file_dir, args.threads, args.min_clip_num, args.min_clip_len, args.dp_win_size, args.min_dep, args.max_dep, args.min_dep_reg)
         try:
-            run_find_candidate2_parallel(corrected_ref, samtools_out1, ctg_ls, step2_dir, args.threads, config["step2"])
+            run_find_candidate2_parallel(corrected_ref, samtools_out1, ctg_ls, step2_dir, args.threads, config["step2"], args)
         except:
             raise Exception("Run step2 Failed!!!")
         overwrite = True
 
+    
     ## step3 SVconsensus
     t3 = time.time()
+    print("STEP2 cost: ", t3 - t2)
     SV_consensus_fasta = os.path.join(step3_dir, "consensus.fasta")
     SV_consensus_bed = os.path.join(step3_dir, "consensus.bed")
     merge_fasta = os.path.join(step3_dir, "merge.fasta")
@@ -230,15 +311,21 @@ def main():
         bam_in = samtools_out1
         logger.info("Run step3 SV consensus")
         try:
-            run_SVconsensus_parallel(step3_dir, bam_in, ctg_ls, candidate_bed, args.threads, args.fastq_in, args.data_type, corrected_ref, args.Nfill_size, genome_size, args.ex_unmapped_denovo, config["step3"])
+            run_SVconsensus_parallel(step3_dir, bam_in, ctg_ls, candidate_bed, args.threads, args.fastq, args.data_type, corrected_ref, args.Nfill_size, genome_size, args.ex_unmapped_denovo, args.out_denovo, keep_ls, args, config["step3"])
         except:
             raise Exception("Run step3 Failed!!!")
         overwrite = True
 
     ## step4 polish
-    t4 = time.time()
-    t5 = time.time()
+    ## correct mode
+    if args.skip_denovo:
+        fa_in = SV_consensus_fasta
+    else:
+        fa_in = merge_fasta
+    t4 = time.time()    # start
+    t5 = time.time()    # 
     t6 = time.time()
+    print("STEP3 cost: ", t6 - t3)
     polish_out = os.path.join(step4_dir, "racon.fasta")
     if re_run == "step4": overwrite = True
     if os.path.isfile(polish_out) and not overwrite:
@@ -254,14 +341,14 @@ def main():
         
         ## 
         try:
-            run_minimap2(merge_fasta, args.fastq_in, args.data_type, args.threads, minimap_out2, minimap2_params_ls2)
+            run_minimap2(fa_in, args.fastq, args.data_type, args.threads, minimap_out2, minimap2_params_ls2)
         except:
             raise Exception("Run mapping to consensus fasta failed!!!")
         t5 = time.time()
 
         logger.info("Run racon polish")
         ''' racon: -u, --include-unpolished   output unpolished target sequences'''
-        polish_cmd = ["racon", racon_params, args.fastq_in, minimap_out2, merge_fasta, "-t", str(args.threads), ">", polish_out]
+        polish_cmd = ["/usr/bin/time -v racon", racon_params, args.fastq, minimap_out2, fa_in, "-u", "-t", str(args.threads), ">", polish_out]
         logger.info("Running: %s", " ".join(polish_cmd))
         try:
             subprocess.check_call(" ".join(polish_cmd), shell=True)
@@ -269,8 +356,10 @@ def main():
             raise Exception("Run racon polish failed!!!")
         overwrite = True
         t6 = time.time()
-
+    if args.skip_denovo:
+        return
     ## step5 scaffolding
+    print("STEP4 cost: ", t6 - t4)
     connect_file = os.path.join(step3_dir, "connect.txt")
     scaffold_out = os.path.join(step5_dir, "final.fasta")
     if re_run == "step5": overwrite = True

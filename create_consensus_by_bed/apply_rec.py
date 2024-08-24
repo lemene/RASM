@@ -1,7 +1,10 @@
 from create_consensus_by_bed import fasta_parser
 from create_consensus_by_bed.Utils import Connect_info, Record
+import copy
 # from Utils import Connect_info, Record
 # import fasta_parser
+def reg_to_id(reg):
+    return reg[0] + ":" + str(reg[1]) + "-" + str(reg[2])
 def apply_rec_on_ref(rec_ls, ref_seq_in, N_FILL_SIZE):  # N_fill_size
     ''' 提供参考序列一条contig，及对其的所有操作集 '''
     '''per ctg'''
@@ -67,13 +70,13 @@ def apply_rec_on_ref2(chr_id, rec_ls, ref_dic:dict):
     ref_seq_in = ref_dic[chr_id]
     connect_info = Connect_info(chr_id, [], []) # 
 
-    if len(rec_ls) == 0:
+    if len(rec_ls) == 0:    # 说明当前contig没有修正记录
         consensus_fa_dic[chr_id] = ref_seq_in
         connect_info.connect_ls.append(chr_id)
         return connect_info, consensus_fa_dic
         # return [ref_seq_in]
     if len(rec_ls) == 1:
-        if rec_ls[0].operation == "keep_ref":   # 摆烂式
+        if rec_ls[0].operation == "keep_ref":   # 摆烂式，弃置
             consensus_fa_dic[chr_id] = ref_seq_in
             connect_info.connect_ls.append(chr_id)
             return connect_info, consensus_fa_dic
@@ -89,6 +92,8 @@ def apply_rec_on_ref2(chr_id, rec_ls, ref_dic:dict):
     new_seq = ""
     pre_end = 0    # 
     for rec in rec_ls:  # 重新构写一下，引入对N_fill的处理
+        # if rec.skip:continue    # 有问题
+        ##
         start = rec.start
         end = rec.end
         op_ls = rec.operation.split(",")
@@ -114,6 +119,8 @@ def apply_rec_on_ref2(chr_id, rec_ls, ref_dic:dict):
             elif op.endswith("patch"):
                 new_seq += info_ls[i]   # 接上这段
                 # alter_seq += info_ls[i]
+            elif op.endswith("skip"):   # 该区域使用原读数填充
+                new_seq += ref_seq_in[rec.start:rec.end]
             else:   # 对于INV等还有待考虑
                 # print(rec.rec.operation)
                 print(rec.chr_id, rec.start, rec.end, rec.operation, rec.info, "不支持的operation")
@@ -135,6 +142,80 @@ def apply_rec_on_ref2(chr_id, rec_ls, ref_dic:dict):
         connect_info.connect_ls.append(seq_id)  # 按顺序记录seqid的在基因组的连接顺序    
     
     return connect_info, consensus_fa_dic
+
+
+def get_semi_rec(candidate_op_ls):
+    '''
+    1、process one ctg
+    2、仅处理read patch区域
+    '''
+    final_op_ls = []
+    for rec in candidate_op_ls:
+        if rec.operation.endswith("reads"):
+            rec.add_operation("reads_patch")
+            final_op_ls.append(rec)
+        elif rec.operation.endswith("asm"):
+            final_op_ls.append(rec)
+        else: raise ValueError
+
+    return final_op_ls
+
+def apply_read_patch(chr_id, rec_ls, ref_dic:dict):
+    ''' 提供参考序列一条contig，及对其的所有操作集，将处理后的contig写入consensus_fa_dic中 '''
+    '''
+    '''
+    consensus_fa_dic = {}
+    ctg_new_rec_dic = {}
+    reg_trans = {}  # old -> new
+    ref_seq_in = ref_dic[chr_id]
+    new_rec_ls = []
+    # 
+    if len(rec_ls) == 0:
+        consensus_fa_dic[chr_id] = ref_seq_in
+        return ctg_new_rec_dic, consensus_fa_dic, reg_trans
+    # 
+    rec_ls.sort(key=lambda rec:int(rec.start))  # 防止有乱序的
+    new_seq = ""
+    pre_end = 0    # pre rec end
+    bias = 0
+    for rec in rec_ls:
+        print("Apply reads patch for:{}:{}-{}".format(rec.chr_id, rec.start, rec.end))
+        new_rec = copy.deepcopy(rec)
+        # 
+        op_ls = rec.operation.split(",")
+        info_ls = rec.info.split(",")
+        new_seq += ref_seq_in[pre_end:rec.start]    # 加上上一段rec的末尾到现在rec前面的中间这段序列，相当于是保留的，bias不变
+        # new_rec.start = len(new_seq)
+        new_rec.start = new_rec.old_start + bias
+        ## process
+        for i, op in enumerate(op_ls):
+            if op == "reads_patch":
+                new_seq += info_ls[i]   # 接上这段
+                # new_rec.skip = True
+                new_rec.operation = "skip"
+                seq_diff = len(info_ls[i]) - (rec.end - rec.start)  # new_seq - old_seq
+                bias += seq_diff # seq diff
+                # print("Reg_len:", rec.start, rec.end, rec.end - rec.start,",patch_len:", len(info_ls[i]))
+                # print("seq_diff:", seq_diff)
+                # print("bias:", bias)
+            else:   # 保留，并更改坐标
+                new_seq += ref_seq_in[rec.start:rec.end]
+        # new_rec.end = len(new_seq)
+        new_rec.end = new_rec.old_end + bias
+        # 
+        pre_end = rec.end
+        new_rec_ls.append(new_rec)
+        reg_trans[reg_to_id([new_rec.chr_id, new_rec.old_start, new_rec.old_end])] = reg_to_id([new_rec.chr_id, new_rec.start, new_rec.end])
+    new_seq += ref_seq_in[pre_end:len(ref_seq_in)]  # 加上最后一个rec后面的序列
+    consensus_fa_dic[chr_id] = new_seq
+    
+    ctg_new_rec_dic[chr_id] = new_rec_ls
+    # print("Reg trans:", reg_trans)
+    return ctg_new_rec_dic, consensus_fa_dic, reg_trans
+
+def polish_():
+    
+    pass
 
 if __name__ == "__main__":
 
@@ -158,7 +239,7 @@ if __name__ == "__main__":
             rec_ls.append(rec)
     print("get rec Done")
     connect_info = apply_rec_on_ref2(chr_id, rec_ls, ref_dic, consensus_fa_dic)
-    import copy
+    # import copy
     fa_out = "/public/home/hpc214712170/Test/tests/chm13_hifi_ctgs/NC_18/my_pipe/step3_SV_consensus/test.fa"
     merge_fa_dic = copy.deepcopy(consensus_fa_dic)
     # fasta_parser.write_fasta_dict(consensus_fa_dic, fa_out)

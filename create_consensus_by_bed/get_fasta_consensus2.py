@@ -30,6 +30,7 @@ chr1    100     120     asm_patch       AGCTGCT             asm_id
 chr1    100     120     N_fill          NNNNNNNNNN(.)       .
 '''
 import argparse
+import math
 import os
 import sys
 import pysam
@@ -44,15 +45,22 @@ import shutil
 import logging
 import gzip
 import copy
-from create_consensus_by_bed import fasta_parser, solve_region_by_reads, merge_clip_regions, cluster_for_reg, apply_rec, solve_by_denovo # linux pipe执行
-from create_consensus_by_bed.Utils import Record, _enable_logging, Run_for_denovo, get_unmapped_reads, run_cmd_ls, make_dir, DepthRec
+from create_consensus_by_bed import fasta_parser, solve_region_by_reads, merge_clip_regions, cluster_for_reg, apply_rec, solve_by_denovo, Scaffolding # linux pipe执行
+from create_consensus_by_bed.Utils import Record, _enable_logging, Run_for_denovo, get_unmapped_reads, run_cmd_ls, make_dir, DepthRec, Connect_info, run_minimap2, run_samtools, reg_to_id, id_to_reg
 from find_candidate_regions.find_reg_by_depth import Depth_info
+from create_consensus_by_bed import extract_read_fastq_utils
+# from create_consensus_by_bed.extract_read_fastq_utils import get_region_read_ids, select_reads_from_names
 # import fasta_parser
 # import solve_region_by_reads
 # import merge_clip_regions
 # import cluster_for_reg
 # import apply_rec
 # from Utils import Record, _enable_logging, Run_for_denovo
+def call_back(res):
+    print(res)
+
+def error_call_back(error_code):
+    print(error_code)
 
 Region = namedtuple('Region', ["chr_id", "start", "end"])
 Chr_info = namedtuple('Chr_info', ["chr_id", "chr_len"])
@@ -179,7 +187,8 @@ def rec_cluster_by_dis(rec_ls_in:list, dis):
         new_rec.add_info(".")
         new_rec.add_patch_id(".")
         ls_out.append(new_rec)
-    print("cluster:\n{}->\n{}".format(rec_ls_in, ls_out))
+    # print("cluster:\n{}->\n{}".format(rec_ls_in, ls_out))
+    print("Cluster:from {}->{}".format(len(rec_ls_in), len(ls_out)))
     return ls_out
 
 def write_rec_to_bed(bed_file, rec_ls):
@@ -278,6 +287,7 @@ def cluster_by_asm_candidate(ls_in, chr_id, chr_len, bed_out_dir, config):
     ## 两轮聚类: 大的聚类 big_cluster
     big_cluster_params = config["cluster_by_asm_candidate"]["big_cluster"]
     if big_cluster_params["apply_big_cluster"]:
+        print("Apply big_cluster")
         reg_size = big_cluster_params["reg_size"]
         cluster_dis = big_cluster_params["cluster_dis"]
         radius = big_cluster_params["radius"]
@@ -344,6 +354,10 @@ def cluster_by_asm_candidate(ls_in, chr_id, chr_len, bed_out_dir, config):
         ls.append(new_rec)
     write_rec_to_bed(bed4, ls)
 
+    ## 进行最后的asm 区域之间的合并，将邻近的
+    print("------------------Perform final denovo reg merge")
+    asm_candidate_cluster_dis = config["get_candidate_op"]["asm_candidate_cluster_dis"]
+    ls = rec_cluster_by_dis(ls, asm_candidate_cluster_dis)
 
     ls.extend(ls_in)    # 直接将初始的和新数组混在一起，后面在给过滤掉吧
     return ls
@@ -477,7 +491,7 @@ def get_candidate_op(bedinfo_ls_in:list, bam_in, bed_out_dir, Depthrec:DepthRec,
     start = -1
     end = -1
     need_to_merge = []
-    for rec in candidate_op_ls_out:     # 消除交叠的区间
+    for rec in candidate_op_ls_out:     # 消除交叠的区间 remove overlap
         if start > -1:
             if rec.start < end: # 与前面的区间有交叠，合并
                 end = max(rec.end, end)     # 更新end
@@ -580,7 +594,11 @@ def convert_reference_pos_to_raw_pos(read, candidate_pos, include_hardclip:bool)
     # return raw_ref_pos_map,read_length
     # return raw_ref_pos_map
 
-def get_candidate_ctgs(bam_in, reg):
+def get_candidate_ctgs(bam_in, reg, config):
+    '''
+    min_align_length: 5000
+    min_dis: 1000   # 5000
+    '''
     ##
     left_candidate_ls = []
     right_candidate_ls = []
@@ -590,16 +608,20 @@ def get_candidate_ctgs(bam_in, reg):
     r_ids = set()
     min_MQ = 20     # 太严格了，局部组装比对质量可能并不高
     bam_reader = pysam.AlignmentFile(bam_in, "rb", index_filename=bam_in+".bai")
-    # chr_id = reg.chr_id
-    # chr_len = bam_reader.get_reference_length(chr_id)   # 
-    min_patch_len = 5000    # 只保留patch超过一定长度的
+    chr_id = reg.chr_id
+    chr_len = bam_reader.get_reference_length(chr_id)   # 
+    #
+    min_dis = config["min_dis"]    # 只保留patch超过一定长度的
+    min_align_length = config["min_align_length"]
+    left_bound = max(reg.start - min_dis, 1)
+    right_bound = min(reg.end + min_dis, chr_len - 1)
     for read in bam_reader.fetch(reg.chr_id, reg.start, reg.end):
-        if read.is_secondary or read.mapping_quality < min_MQ:
+        if read.is_secondary or read.mapping_quality < min_MQ or read.query_alignment_length < min_align_length:
             continue
-        if read.reference_start < reg.start - min_patch_len:    # patch左边界的点
+        if read.reference_start < left_bound:    # patch左边界的点
             left_candidate_ls.append(read)
             l_ids.add(read.query_name)
-        if read.reference_end > reg.end + min_patch_len:        # patch右边界的点
+        if read.reference_end > right_bound:        # patch右边界的点
             right_candidate_ls.append(read)
             r_ids.add(read.query_name)
     candidate_dic["left"] = left_candidate_ls
@@ -789,9 +811,23 @@ def is_difficult_ctg(rec_ls, chr_len, chr_id):     # 判断是否低质量contig
         logger.info("{} is difficult contig, {} portion is bad region!!!!".format(rec.chr_id, asm_len / chr_len))
         return True
     return False
+def get_semi_rec(candidate_op_ls):
+    '''
+    1、process one ctg
+    2、仅处理read patch区域
+    '''
+    final_op_ls = []
+    for rec in candidate_op_ls:
+        if rec.operation.endswith("reads"):
+            rec.add_operation("reads_patch")
+            final_op_ls.append(rec)
+        elif rec.operation.endswith("asm"):
+            final_op_ls.append(rec)
+        else: raise ValueError
 
+    return final_op_ls
 
-def get_rec_by_asm(bam_in, candidate_op_ls, asm_fa_dic): # 传入asm_to_ref.bam, op_Ls
+def get_rec_by_asm(ctg, bam_in, candidate_op_ls, asm_fa_dic, config): # 传入asm_to_ref.bam, op_Ls
     '''
     process one ctg, 
     '''
@@ -810,14 +846,19 @@ def get_rec_by_asm(bam_in, candidate_op_ls, asm_fa_dic): # 传入asm_to_ref.bam,
             rec.add_operation("reads_patch")
             final_op_ls.append(rec)
             # logger.info("{}:{}-{} reads_patch".format(rec.chr_id, rec.start, rec.end))
+        elif rec.operation.endswith("skip"):
+            final_op_ls.append(rec)
+            print("Skip:{}:{}-{}".format(rec.chr_id, rec.start, rec.end))
         elif rec.operation.endswith("asm"):   # endswith("asm")  将所有asm区域收集
             # reg_id = rec.chr_id + ":" + str(rec.start) + "-" + str(rec.end)
             # if reg_id in asm_reg_ids:
             asm_candidate_ls.append(rec)
             # logger.info("{}:{}-{} asm".format(rec.chr_id, rec.start, rec.end))
+        # 下面这些已经弃置
+        # DeprecationWarning
         elif rec.operation.endswith("patch"):
             final_op_ls.append(rec)
-            logger.info("{}:{}-{}, {}".format(rec.chr_id, rec.start, rec.end, rec.operation))
+            # logger.info("{}:{}-{}, {}".format(rec.chr_id, rec.start, rec.end, rec.operation))
         elif rec.operation == "replace_with_denovo":
             final_op_ls.append(rec)
         else:
@@ -832,8 +873,11 @@ def get_rec_by_asm(bam_in, candidate_op_ls, asm_fa_dic): # 传入asm_to_ref.bam,
         ## 判断是否几乎whole contig 被认为是difficult region
         # ctg_len = ctg_len_dic[rec.chr_id]
         ctg_len = bam_reader.get_reference_length(rec.chr_id)
+        if ctg_len == 0:
+            print(rec.chr_id)
+            exit(0)
         '''solve difficult contig'''
-        if (rec.end - rec.start) / ctg_len > 0.8:    ## too difficult contig???一条染色体有一半是复杂区域，我们全部进行从头组装
+        if (rec.end - rec.start) / ctg_len > 0.8:    ## too difficult contig???一条染色体有一半是复杂区域，我们全部进行从头组装。使用从头组装结果来替代。
             info_ls = []
             patch_ls = []
             for read in bam_reader.fetch(rec.chr_id):
@@ -855,11 +899,11 @@ def get_rec_by_asm(bam_in, candidate_op_ls, asm_fa_dic): # 传入asm_to_ref.bam,
             print("{} replace_with_denovo: {}".format(rec.chr_id, patch_ls))
             logger.info("{} replace_with_denovo: {}".format(rec.chr_id, patch_ls))
             final_op_ls = [new_rec]
-            return final_op_ls
+            return ctg, final_op_ls
         
         '''普通情形'''
         ## 找到pass左边和pass右边的最佳序列
-        candidate_dic = get_candidate_ctgs(bam_in, Region(rec.chr_id, rec.start, rec.end))
+        candidate_dic = get_candidate_ctgs(bam_in, Region(rec.chr_id, rec.start, rec.end), config)
         left_candidate_ls = candidate_dic["left"]
         right_candidate_ls = candidate_dic["right"]     # 
         ## 
@@ -875,20 +919,67 @@ def get_rec_by_asm(bam_in, candidate_op_ls, asm_fa_dic): # 传入asm_to_ref.bam,
             new_rec = solve_t2(left_candidate_ls, right_candidate_ls, rec, asm_fa_dic)
         final_op_ls.append(new_rec)
 
-    return final_op_ls
-
+    return ctg, final_op_ls
 
 # def SV_consensus_on_ref(candidate_op_ls, ref_seq, asm_fa_dic, bam_in, N_fill_size, final_rec_dic, final_seq_dic):
-def SV_consensus_on_ref(chr_id, candidate_op_ls, ref_dic:dict, asm_fa_dic, bam_in, N_fill_size):
+def SV_consensus_on_ref(chr_id, candidate_op_ls, ref_dic:dict, asm_fa_dic, bam_in, config):
     ''' 单线程的处理结果 '''
     ''' 注意提供的bam是asm_to_ref的bam, 提供新组装结果的consensus_fa_dic '''
     ''' 多线程操作字典修改可能会冲突，需要每个染色体单独返回一个字典 '''
-    final_rec_ls = get_rec_by_asm(bam_in, candidate_op_ls, asm_fa_dic)
+    ctg, final_rec_ls = get_rec_by_asm(chr_id, bam_in, candidate_op_ls, asm_fa_dic, config["solve_by_denovo"])
     # new_seq_ls = apply_rec_on_ref(final_rec_ls, ref_seq, N_fill_size, consensus_fa_dic)
     connect_info, ctg_consensus_fa_dic = apply_rec.apply_rec_on_ref2(chr_id, final_rec_ls, ref_dic)
     # return final_rec_ls, new_seq_ls
     return final_rec_ls, connect_info, ctg_consensus_fa_dic
+def SV_consensus_on_ref2(all_chrs, candidate_op_dic, ref_dic:dict, asm_fa_dic, bam_in, SVconsensus_bed_out, consensus_fasta_out, work_dir, threads, config):
+    ''' 单线程的处理结果 '''
+    ''' 注意提供的bam是asm_to_ref的bam, 提供新组装结果的consensus_fa_dic '''
+    ''' 多线程操作字典修改可能会冲突，需要每个染色体单独返回一个字典 '''
+    rec_dic = defaultdict(list)
+    final_rec_ls = []
+    pool = Pool(processes=threads)
+    results = [pool.apply_async(Scaffolding.get_rec_by_asm, args=(ctg, bam_in, candidate_op_dic[ctg], asm_fa_dic, config["solve_by_denovo"])) for ctg in all_chrs]
+    pool.close() # 关闭进程池，表示不能再往进程池中添加进程，需要在join之前调用
+    pool.join() # 等待进程池中的所有进程执行完毕
+    for i, res in enumerate(results):
+        ctg, ctg_final_rec_ls = res.get()
+        rec_dic[ctg] = ctg_final_rec_ls
+        final_rec_ls.extend(ctg_final_rec_ls)
+    ## 
+    connect_info_ls, patch_ids, consensus_dic = Scaffolding.consensus(bam_in, ref_dic, rec_dic, asm_fa_dic, consensus_fasta_out, work_dir, config, True)
+    ## 
+    # connect_info_ls = []
+    # for ctg_id, ctg in consensus_dic.items():
+    #     connect_info = Connect_info(ctg_id, [], []) # 
+    #     connect_info.connect_ls.append(ctg_id)
+    ## 
+    Record.write_record(final_rec_ls, SVconsensus_bed_out)
+    return connect_info_ls, patch_ids, consensus_dic
+
+def run_SV_consensus_on_ref(threads, ctg_ls, SVconsensus_bed_out, consensus_fasta_out, semi_candidate_op_dic, asm_fa_dic, ref_dic, consensus_fa_dic, asm_to_ref_bam, Nfill_size):
+    # run
+    logger.info("Run SV_consensus_on_ref")
+    pool = Pool(processes=threads)
+    results = [pool.apply_async(SV_consensus_on_ref, args=(ctg, semi_candidate_op_dic[ctg], ref_dic, asm_fa_dic, asm_to_ref_bam, Nfill_size)) for ctg in ctg_ls]
+    pool.close() # 关闭进程池，表示不能再往进程池中添加进程，需要在join之前调用
+    pool.join() # 等待进程池中的所有进程执行完毕
+    connect_info_ls = []
+    with open(SVconsensus_bed_out, "w") as fo2:     # 非并行写文件
+        fo2.write("#chr_id\tstart\tend\topertion\tinfo\tpatch_id\n")
+        for i, res in enumerate(results):
+            final_rec_ls, connect_info, ctg_consensus_fa_dic = res.get()
+            # ctg = all_chrs[i]
+            connect_info_ls.append(connect_info)
+            consensus_fa_dic.update(ctg_consensus_fa_dic)   # 将每个线程的字典 consensus 结果加入进来
+            ## write record bed
+            for rec in final_rec_ls:
+                fo2.write("{}\t{}\t{}\t{}\t{}\t{}\n".format(rec.chr_id, rec.start, rec.end, rec.operation, rec.info, rec.patch_id))
 #################################################get rec的函数结束#################################################
+def apply_reads_consensus():
+    pass
+
+
+####################
 
 
 
@@ -918,56 +1009,10 @@ def load_candidate_reg_bed(candidate_bed):  # 加载第一步通过特征找到�
     print("Load candidate bed, done cost:{}s".format(time.time() - t0))
     return bedinfo_dic
 
-def select_reads_from_names(fastq_in, fastq_out, read_ids, threads):
-    ## 使用seqkit实现 
-    '''seqkit grep -f id.txt -j threads seqs.fq.gz -o result.fq.gz'''
-    # seqkit_cmd = ["seqkit", "grep", "-f", read_ids, "-j", str(threads), fastq_in, "-o", fastq_out]
-    # logger.info("Running: %s", " ".join(seqkit_cmd))
-    cmd = ["seqtk", "subseq", fastq_in, read_ids, ">", fastq_out]   ## bbmap filterbyname.sh 命令好像更快 
-    logger.info("Running: %s", " ".join(cmd))
-    subprocess.check_call(" ".join(cmd), shell=True)
-
-def get_reg_ids(bam_in, reg_ls):
-    read_ids = set()
-    bam_reader = pysam.AlignmentFile(bam_in, "rb", index_filename=bam_in+".bai")
-    for reg in reg_ls:
-        for read in bam_reader.fetch(reg[0], reg[1], reg[2]):
-            read_ids.add(read.query_name)
-    return read_ids
-
-def get_reg_ids_parallel(bam_in, reg_ls, threads):
-    random.shuffle(reg_ls)
-    batch_size = len(reg_ls) // (threads + 1)   # 划分batch
-    batches = []
-    for i in range(threads):
-        batch_reg_ls = reg_ls[i*batch_size:(i+1)*batch_size]
-        batches.append(batch_reg_ls)
-    results = []
-    pool = Pool(processes=threads)
-    results = [pool.apply_async(get_reg_ids, args=(bam_in, batch_reg_ls)) for batch_reg_ls in batches]
-    pool.close() # 关闭进程池，表示不能再往进程池中添加进程，需要在join之前调用
-    pool.join() # 等待进程池中的所有进程执行完毕
-    ids = set()
-    for res in results:
-        ids.update(res.get())
-
-def get_frag_reads(fa_in, final_rec_bed):
+def get_frag_reads(fa_in, patch_ids):
     '''收集local denovo在后面的修补中用掉的碎片contig，返回剩余的序列片段'''
     '''chr     start   end     operation       info                patch_id'''
-    ## 1、get_patch_ids
-    patch_ids = set()
-    with open(final_rec_bed, "r") as f:
-        for line in f:
-            if line.startswith("#"): continue
-            fields = line.strip().split("\t")   # 注意加上\t，兼容del
-            op_ls = fields[3].split(",")
-            patch_ls = fields[5].split(",")     # 
-            for i, op in enumerate(op_ls):
-                if op == "replace_with_denovo":
-                    for id in patch_ls:patch_ids.add(id)    #   replace这种也要排除
-                if op == "asm_patch":   # 用掉的碎片ctg
-                    patch_ids.add(patch_ls[i])
-    ## 2、get fragement sequence
+    ## get fragement sequence
     frag_dic = {}
     fa_dic = fasta_parser.read_sequence_dict(fa_in)
     for ctg,seq in fa_dic.items():
@@ -979,19 +1024,23 @@ def get_depthrec(dp_file, chr_id, chr_len, win_size, block_size, whole_dp):
     dp_ls = DepthRec.read_mosdepth_dp_file(dp_file)
     ctg_depth_rec = DepthRec(chr_id, chr_len, dp_ls, win_size, block_size, whole_dp)
     return ctg_depth_rec
-def get_depth_dic(threads):
-    pass
 
+'''
+改进：优化读数缺失问题,收集高剪切primary读数用于组装。从所有读数中搜/从所有区间搜
+
+'''
 def run_SVconsensus_parallel(out_dir, bam_in, process_ctg_ls,
                        candidate_bed, threads, fastq_in, data_type,
                        reference_fn, Nfill_size, genome_size,
-                       ex_unmapped_denovo, config):
+                       ex_unmapped_denovo, out_denovo, keep_ls, args, config):
     ## 
 
     my_log = out_dir + "/get_fasta_consensus2.log"
     _enable_logging(my_log, debug=False, overwrite=True)
+    ref_dic = fasta_parser.read_sequence_dict(reference_fn)
     t1 = time.time()
     bam_reader = pysam.AlignmentFile(bam_in, "rb", index_filename=bam_in+".bai", threads=threads)
+    all_chrs = bam_reader.references
     logger.info("Process contigs: {} !!!".format(process_ctg_ls))
 
     ## get depths_file
@@ -1014,6 +1063,7 @@ def run_SVconsensus_parallel(out_dir, bam_in, process_ctg_ls,
         parse_res = res.get()
         depthrec_dic[parse_res.chr_id] = parse_res
     print("get depth done")
+
     ### ****************** [Candidate bed regions process] ******************
     ## load candidate bed file  
     bedinfo_dic = load_candidate_reg_bed(candidate_bed)
@@ -1044,6 +1094,57 @@ def run_SVconsensus_parallel(out_dir, bam_in, process_ctg_ls,
     t2 = time.time()
     # return
 
+    if args.skip_denovo:    # correct mode, 跳过后面的denovo
+        '''还需要完事correct mode'''
+        SV_consensus_dir = out_dir
+        make_dir(SV_consensus_dir)
+        SVconsensus_bed_out = SV_consensus_dir + "/consensus.bed"
+        consensus_fasta_out = SV_consensus_dir + "/consensus.fasta"
+        consensus_fa_dic = {}
+        # correct mode
+        print("----------Skip denovo, correct mode----------")
+        if args.cut:
+            asm_opertion = "asm_cut"
+            print("cut asm region")
+        else:
+            asm_opertion = "asm_skip"
+            print("skip asm region")
+        # 
+        final_op_dic = defaultdict(list)
+        for ctg in candidate_op_dic.keys(): # 获取final rec ls
+            op_ls = candidate_op_dic[ctg]
+            new_op_ls = []
+            for rec in op_ls:
+                if rec.operation.endswith("reads"): # ！！！理论上这种情况应该会很少，由读数填充的区域  ->改进
+                    rec.add_operation("reads_patch")
+                    new_op_ls.append(rec)
+                elif rec.operation.endswith("asm"):   # endswith("asm")  将所有asm区域收集
+                    rec.add_operation(asm_opertion)
+                    new_op_ls.append(rec)
+                else:
+                    raise ValueError
+            final_op_dic[ctg] = new_op_ls
+        ## 
+        connect_info_ls = []
+        pool = Pool(processes=threads)
+        results = [pool.apply_async(apply_rec.apply_rec_on_ref2, args=(ctg, final_op_dic[ctg], ref_dic)) for ctg in all_chrs]
+        pool.close() # 关闭进程池，表示不能再往进程池中添加进程，需要在join之前调用
+        pool.join() # 等待进程池中的所有进程执行完毕
+        for i, res in enumerate(results):
+            connect_info, ctg_consensus_fa_dic = res.get()
+            # ctg = all_chrs[i]
+            connect_info_ls.append(connect_info)
+            consensus_fa_dic.update(ctg_consensus_fa_dic)   # 将每个线程的字典 consensus 结果加入进来
+        all_final_ls = []
+        for ctg in final_op_dic.keys():
+            all_final_ls.extend(final_op_dic[ctg])
+        Record.write_record(all_final_ls, SVconsensus_bed_out)
+        fasta_parser.write_fasta_dict(consensus_fa_dic, consensus_fasta_out)
+        return
+    else:   # 非correct mode，不跳过
+        pass
+    
+    
     #### ****************** [local denovo assembly] ******************
     logger.info("Run local assembly module !!! ")
     denovo_asm_dir = out_dir +"/denovo_asm"     # 母目录, 存的是所有denovo区域的数据
@@ -1052,8 +1153,174 @@ def run_SVconsensus_parallel(out_dir, bam_in, process_ctg_ls,
     ## then extract fastq from reads_set()
     unmapped_fq = denovo_asm_dir + "/unmapped.fastq"
     get_unmapped_reads(threads, bam_in, unmapped_fq, "fastq")
+    ### ----------------------------------new pipe---------------------------------- ###
+    candidate_op_ls = []
+    for op_ls in candidate_op_dic.values():
+        candidate_op_ls.extend(op_ls)
+    #  
+    reg_read_ids_dic, clip_read_ids_dic = extract_read_fastq_utils.get_region_read_ids(out_dir, bam_in, threads, candidate_op_ls, whole_dp, config)   # asm_reg_id -> reg_read_ids
+    asm_region_fq = denovo_asm_dir + "/region.fastq"
+    region_ids_fn = denovo_asm_dir + "/region_ids.bed"
+    extract_read_fastq_utils.write_read_ids(region_ids_fn, reg_read_ids_dic["all_read"])
+    solve_by_denovo.select_reads_from_names(fastq_in, asm_region_fq, region_ids_fn, threads)
+    # 
+    print("Get raw fastq denoe!!!")
+    t3 = time.time()
+
+    ## ----------------------------------2、apply reads patch----------------------------------
+    if config["apply_read_patch_first"]:
+        print("------------------------------Apply reads patch------------------------------")
+        mm_num = max(math.ceil(config["high_clip"]["min_high_clip_num"]), config["high_clip"]["min_portion"] * whole_dp)
+        ##  抽取clip区域的读数
+        clip_dir = out_dir + "/clip"
+        make_dir(clip_dir)
+        raw_clip_read_ids_fn = clip_dir + "/raw_clip_ids.bed"
+        raw_clip_read_fq = clip_dir + "/raw_clip_ids.fastq"
+        clip_bam = clip_dir + "/clip2ref.bam"
+        clip_sam = clip_dir + "/clip2ref.sam"
+        extract_read_fastq_utils.write_read_ids(raw_clip_read_ids_fn, reg_read_ids_dic["clip_read"])
+        solve_by_denovo.select_reads_from_names(asm_region_fq, raw_clip_read_fq, raw_clip_read_ids_fn, threads)
+        ##
+        semi_consensus_bed = out_dir + "/semi_consensus.bed"
+        semi_consensus_fa = out_dir + "/semi_consensus.fa"
+        semi_candidate_op_dic = defaultdict(list)
+        reg_trans = {}
+        semi_consensus_fa_dic = {}
+        results = []
+        pool = Pool(processes=threads)
+        for chr_id in all_chrs:
+            rec_ls = apply_rec.get_semi_rec(candidate_op_dic[chr_id])
+            results.append(pool.apply_async(apply_rec.apply_read_patch, args=(chr_id, rec_ls, ref_dic), error_callback=error_call_back))
+        pool.close() # 关闭进程池，表示不能再往进程池中添加进程，需要在join之前调用
+        pool.join() # 等待进程池中的所有进程执行完毕
+        for res in results:
+            semi_ctg_op_dic, ctg_consensus_fa_dic, ctg_reg_trans = res.get()
+            semi_candidate_op_dic.update(semi_ctg_op_dic)
+            # print("ctg_reg_trans:", ctg_reg_trans)
+            reg_trans.update(ctg_reg_trans)
+            semi_consensus_fa_dic.update(ctg_consensus_fa_dic)
+        fasta_parser.write_fasta_dict(semi_consensus_fa_dic, semi_consensus_fa)
+        # 
+        semi_op_ls = []
+        for key in semi_candidate_op_dic.keys():
+            semi_op_ls.extend(semi_candidate_op_dic[key])
+        Record.write_record(semi_op_ls, semi_consensus_bed)
+        # print(reg_trans)
+        ## map clip reads to semi fasta 
+        print("-------------------------map clip reads to semi fasta---------------------------")
+        run_minimap2(semi_consensus_fa, raw_clip_read_fq, data_type, threads, clip_sam, ["-w16 -k24"])
+        run_samtools(clip_sam, clip_bam, threads)
+        ##
+        clip_reg_fille = clip_dir + "/clip_reg.bed"
+        final_clip_ids = set()
+        results = []
+        pool = Pool(processes=threads)
+        for reg in clip_read_ids_dic.keys():    # 是否选择使用全部的读数填充缺口
+            new_reg_id = reg_trans[reg]
+            try:
+                new_reg = id_to_reg(new_reg_id)
+            except:
+                print("Error id:", new_reg_id)
+                exit()
+            # flag, new_reg, ids_set = extract_read_fastq_utils.get_clip_read_ids(bam_in, threads, new_reg, mm_num, config)
+            results.append(pool.apply_async(extract_read_fastq_utils.get_clip_read_ids, args=(clip_bam, threads, new_reg, mm_num, config), error_callback=error_call_back))
+        pool.close() # 关闭进程池，表示不能再往进程池中添加进程，需要在join之前调用
+        pool.join() # 等待进程池中的所有进程执行完毕
+        with open(clip_reg_fille, "w") as f:
+            for res in results:
+                flag, reg, ids_set = res.get()
+                final_clip_ids.update(ids_set)
+                if len(ids_set) >= mm_num:
+                    f.write("{}\t{}\t{}\t{}\n".format(reg[0], reg[1], reg[2], len(ids_set)))
+        print("Raw clip nuqm: {},-> Final clip read num:{}".format(len(reg_read_ids_dic["clip_read"]), len(final_clip_ids)))
+        clip_read_ids = final_clip_ids
+        fa_for_consensus = semi_consensus_fa
+    else:
+        fa_for_consensus = reference_fn
+        clip_read_ids = reg_read_ids_dic["clip_read"]
+        semi_candidate_op_dic = candidate_op_dic
+    ## ----------------------------------3、Start assembly----------------------------------
+    print("----------------------------------Start assembly----------------------------------")
+    asm_regions, whole_ctg_asm_reg_ls = [], []
+    for rec in candidate_op_ls:
+        if rec.operation.endswith("asm"):
+            asm_regions.append([rec.chr_id, rec.start, rec.end])
+            if rec.operation == "whole_ctg_asm":
+                whole_ctg_asm_reg_ls.append([rec.chr_id, rec.start, rec.end])
     
-    ## get reads of asm_reagion     may be parallel??
+    # 2.1、ctg denovo
+    ctg_denovo_dir = out_dir +"/ctg_denovo"
+    make_dir(ctg_denovo_dir)
+    print("Start ctg denovo")
+    asm_ctg_ls = []
+    if config["apply_ctg_denovo"]:
+        whole_ctg_asm_reg_ls = solve_by_denovo.filter_empty_ctg(whole_ctg_asm_reg_ls, reg_read_ids_dic)
+        reg_ls = []
+        if config["denovo_by_ctg"]["apply_all"]:
+            print("Apply on all denovo ctg")
+            asm_ctg_ls = [reg[0] for reg in whole_ctg_asm_reg_ls]
+            reg_ls = whole_ctg_asm_reg_ls
+        else:
+            for reg in whole_ctg_asm_reg_ls:
+                if solve_by_denovo.is_abnormal_ctg(dpinfo_dic[reg[0]], config["denovo_by_ctg"]):
+                    print("{} is abnormal ctg, dpinfo: {}".format(reg[0], dpinfo_dic[reg[0]]))
+                    reg_ls.append(reg)
+                    asm_ctg_ls.append(reg[0])
+                else:
+                    print("{} is normal ctg, dpinfo: {}".format(reg[0], dpinfo_dic[reg[0]]))
+        print("Whole ctg denovo have: {}, Apply ctg denovo on: {}".format(whole_ctg_asm_reg_ls, ",".join(asm_ctg_ls)))
+        if len(asm_ctg_ls) > 0:
+            ctg_denovo_dic = solve_by_denovo.run_ctg_denovo(reg_ls, ctg_denovo_dir, reg_read_ids_dic, asm_region_fq, fa_for_consensus, threads, data_type, config)   # 后面会合并    
+        else:
+            print("No asm ctg denovo")
+            ctg_denovo_dic = {}
+    else:
+        ctg_denovo_dic = {}
+    t4 = time.time()
+    
+    # 2.2、merge_denovo
+    merge_denovo_dir = out_dir +"/merge_denovo"
+    make_dir(merge_denovo_dir)
+    merge_denovo_fq = merge_denovo_dir + "/merge.fastq"
+    merge_reg_fq = merge_denovo_dir + "/reg.fastq"
+    merge_reg_read_ids_fn = merge_denovo_dir + "/asm_reg_ids.bed"
+    merge_reg_read_ids = set()
+    merge_local_reg_ls = []
+    merge_reg_read_ids.update(clip_read_ids)
+    print(reg_read_ids_dic.keys())
+    if len(asm_ctg_ls) == 0:    # 
+        merge_reg_read_ids = reg_read_ids_dic["all_read"]
+        merge_local_reg_ls = asm_regions
+    else:
+        for reg in asm_regions:
+            if reg[0] in asm_ctg_ls: continue
+            reg_id = solve_by_denovo.reg_to_id(reg)
+            merge_reg_read_ids.update(reg_read_ids_dic[reg_id]) # reads ids
+            merge_local_reg_ls.append(reg)
+            # print("read set:", reg_read_ids_dic[reg_id])
+    # stats_file = merge_denovo_dir + "/" + "denovo_read.stats"
+    # with open(stats_file, "w") as f:
+    #     f.write("Asm read num:{}\n".format(len(asm_ids)))
+    #     f.write("Clip read num:{}\n".format(len(clip_read_ids)))
+    #     f.write("All read num:{}\n".format(len(all_ids)))
+    #     f.write("Clip read add num:{}\n".format(len(all_ids)-len(asm_ids)))
+    # exit(0)
+    logger.info("Apply merge local denovo on: {}".format(merge_local_reg_ls))
+    extract_read_fastq_utils.write_read_ids(merge_reg_read_ids_fn, merge_reg_read_ids)
+    solve_by_denovo.select_reads_from_names(asm_region_fq, merge_reg_fq, merge_reg_read_ids_fn, threads)
+    reads_merge_cmd = ["cat", unmapped_fq, merge_reg_fq, ">", merge_denovo_fq]
+    logger.info("Running: %s", " ".join(reads_merge_cmd))
+    subprocess.check_call(" ".join(reads_merge_cmd), shell=True)
+    # 
+    merge_denovo_asm_out = Run_for_denovo(merge_denovo_fq, merge_denovo_dir, threads, genome_size, data_type, config)
+    if merge_denovo_asm_out == None:    # 组装失败
+        print("Assembly failed, Done")
+        exit(0)
+    
+    t5 = time.time()
+
+
+    '''## get reads of asm_reagion     may be parallel??
     candidate_op_ls = []
     for op_ls in candidate_op_dic.values():
         candidate_op_ls.extend(op_ls)
@@ -1081,6 +1348,9 @@ def run_SVconsensus_parallel(out_dir, bam_in, process_ctg_ls,
             for read in bam_reader.fetch(reg[0], reg[1], reg[2]):   # 加入了所有的序列
                 asm_regions_ids.add(read.query_name)
                 reg_read_ids_dic[asm_reg_id].add(read.query_name)
+    
+    
+
     t3 = time.time()
     logger.info(" ########################## Extract reads_id finished ########################## ")
 
@@ -1096,6 +1366,7 @@ def run_SVconsensus_parallel(out_dir, bam_in, process_ctg_ls,
     logger.info(" ########################## Extract reads_id cost {}s, Extract fastq cost {}s ########################## ".format(t3 - t2, t4 - t3))
 
 ##########################  Start assembly, 3steps  ##########################
+
     reg_denovo_dir = out_dir + "/" + "denovo_asm1"
     ctg_denovo_dir = out_dir + "/" + "denovo_asm2"
     merge_denovo_dir = out_dir + "/" + "denovo_asm3"
@@ -1108,15 +1379,18 @@ def run_SVconsensus_parallel(out_dir, bam_in, process_ctg_ls,
     ## 2.1、run reg denovo
     if config["apply_denovo_by_reg"]:   # if choose the option
         semi_candidate_op_dic, failed_reg_ls, success_reg_ls = solve_by_denovo.run_reg_denovo(asm_regions, reg_denovo_dir, reg_read_ids_dic, candidate_op_dic, asm_region_fq, \
-        bam_in, threads, data_type, reference_fn, depthrec_dic, config)
-    else:
+        bam_in, threads, data_type, fa_for_consensus, depthrec_dic, config)
+    else:   # 跳过reg denovo
         semi_candidate_op_dic = candidate_op_dic
+        failed_reg_ls = asm_regions
+        success_reg_ls = []
     t4_1 = time.time()
     print("Reg denovo assembly Done, cost {}s !!!".format(time.time() - t4))
     ## 2.2 run ctg denovo for abnormal whole ctg asm
     print("Start ctg denovo")
     asm_ctg_ls = []
     if config["apply_ctg_denovo"]:
+        whole_ctg_asm_reg_ls = solve_by_denovo.filter_empty_ctg(whole_ctg_asm_reg_ls, reg_read_ids_dic)
         reg_ls = []
         if config["denovo_by_ctg"]["apply_all"]:
             print("Apply on all denovo ctg")
@@ -1131,18 +1405,22 @@ def run_SVconsensus_parallel(out_dir, bam_in, process_ctg_ls,
                 else:
                     print("{} is normal ctg, dpinfo: {}".format(reg[0], dpinfo_dic[reg[0]]))
         print("Whole ctg denovo have: {}, Apply ctg denovo on: {}".format(whole_ctg_asm_reg_ls, ",".join(asm_ctg_ls)))
-        ctg_denovo_dic = solve_by_denovo.run_ctg_denovo(reg_ls, ctg_denovo_dir, reg_read_ids_dic, asm_region_fq, reference_fn, threads, data_type, config)   # 后面会合并    
+        if len(asm_ctg_ls) > 0:
+            ctg_denovo_dic = solve_by_denovo.run_ctg_denovo(reg_ls, ctg_denovo_dir, reg_read_ids_dic, asm_region_fq, fa_for_consensus, threads, data_type, config)   # 后面会合并    
+        else:
+            print("No asm ctg denovo")
+            ctg_denovo_dic = {}
     else:
         ctg_denovo_dic = {}
     t4_2 = time.time()
-    ## 2.3、run merge local denovo assembly
+    ## 2.3 run merge local denovo assembly
     logger.info("Start merge local denovo")
     merge_reg_read_ids = set()
     merge_local_reg_ls = []
     for reg in failed_reg_ls:
         if reg[0] in asm_ctg_ls: continue
         reg_id = solve_by_denovo.reg_to_id(reg)
-        merge_reg_read_ids.update(reg_read_ids_dic[reg_id])
+        merge_reg_read_ids.update(reg_read_ids_dic[reg_id]) # reads ids
         merge_local_reg_ls.append(reg)     # 添加数据
     with open(merge_reg_read_ids_fn, "w") as f:
         for read_id in merge_reg_read_ids: 
@@ -1153,17 +1431,25 @@ def run_SVconsensus_parallel(out_dir, bam_in, process_ctg_ls,
     reads_merge_cmd = ["cat", unmapped_fq, merge_reg_fq, ">", merge_denovo_fq]
     logger.info("Running: %s", " ".join(reads_merge_cmd))
     subprocess.check_call(" ".join(reads_merge_cmd), shell=True)
-    merge_denovo_asm_out = Run_for_denovo(merge_denovo_fq, merge_denovo_dir, threads, genome_size, data_type, config)
+    # asm
+    if out_denovo:  # For test
+        print("Skip merge denovo, provide asm from out:", out_denovo)
+        merge_denovo_asm_out = out_denovo
+    else:
+        merge_denovo_asm_out = Run_for_denovo(merge_denovo_fq, merge_denovo_dir, threads, genome_size, data_type, config)
+        if merge_denovo_asm_out == None:    # 组装失败
+            pass
     t5 = time.time()
     logger.info("Merge denovo assembly Done, cost {}s !!!".format(time.time() - t4_1))
     logger.info("Local assembly done, Time stats:\nreg cost {}s\nctg cost {}s\nmerge cost {}s\nsum: {}s".format(t4_1 - t4, t4_2 - t4_1, t5 - t4_2, t5 - t4))
+    '''
 ##########################   Assembly Done   ##########################
     ## 3、map asm fasta to reference  ## 命令还要改一下
     logger.info("****************** map denovo asm to reference start ******************")
-    target_asm = reference_fn
+    fa_for_consensus_dic = fasta_parser.read_sequence_dict(fa_for_consensus)
     query_asm = merge_denovo_asm_out    # denovo asm out
     sorted_bam_out = merge_denovo_dir + "/denovoasm_to_ref.sorted.bam"
-    minimap2_cmd_ls = ["minimap2", "-ax", "asm20", "-t", str(threads), target_asm, query_asm, "|", "samtools", "sort", "-O", "BAM", "-@", str(threads), "-o", sorted_bam_out] 
+    minimap2_cmd_ls = ["minimap2", "-ax", "asm20", "-t", str(threads), fa_for_consensus, query_asm, "|", "samtools", "sort", "-O", "BAM", "-@", str(threads), "-o", sorted_bam_out] 
     index_cmd_ls = ["samtools index -@", str(threads), sorted_bam_out]
     run_cmd_ls(minimap2_cmd_ls)
     run_cmd_ls(index_cmd_ls)
@@ -1173,40 +1459,52 @@ def run_SVconsensus_parallel(out_dir, bam_in, process_ctg_ls,
     ### ****************** [SV consensus on reference] ******************
     ## scan regions to determine specific opertion and consensus on reference
     # SV_consensus_dir = out_dir + "/SV_consensus"
+    consensus_fa_dic = {}
     SV_consensus_dir = out_dir
     make_dir(SV_consensus_dir)
-    denovo_fa = merge_denovo_asm_out    # denovo asm out
     SVconsensus_bed_out = SV_consensus_dir + "/consensus.bed"
     consensus_fasta_out = SV_consensus_dir + "/consensus.fasta"
     asm_to_ref_bam = sorted_bam_out
-    ref_dic = fasta_parser.read_sequence_dict(reference_fn)
+    denovo_fa = merge_denovo_asm_out    # denovo asm out
     asm_fa_dic = fasta_parser.read_sequence_dict(denovo_fa)
-    consensus_fa_dic = {}
-    logger.info(" Parse fasta Done !!!, cost {}s".format(time.time() - t6))
-    all_chrs = bam_reader.references
 
     # run
     logger.info("Run SV_consensus_on_ref")
-    pool = Pool(processes=threads)
-    # results = [pool.apply_async(SV_consensus_on_ref, args=(ctg, candidate_op_dic[ctg], ref_dic[ctg], asm_fa_dic, asm_to_ref_bam, Nfill_size)) for ctg in all_chrs]
-    results = [pool.apply_async(SV_consensus_on_ref, args=(ctg, semi_candidate_op_dic[ctg], ref_dic, asm_fa_dic, asm_to_ref_bam, Nfill_size)) for ctg in all_chrs]
-    pool.close() # 关闭进程池，表示不能再往进程池中添加进程，需要在join之前调用
-    pool.join() # 等待进程池中的所有进程执行完毕
-    connect_info_ls = []
-    with open(SVconsensus_bed_out, "w") as fo2:     # 非并行写文件
-        fo2.write("#chr_id\tstart\tend\topertion\tinfo\tpatch_id\n")
-        for i, res in enumerate(results):
-            final_rec_ls, connect_info, ctg_consensus_fa_dic = res.get()
-            # ctg = all_chrs[i]
-            connect_info_ls.append(connect_info)
-            consensus_fa_dic.update(ctg_consensus_fa_dic)   # 将每个线程的字典 consensus 结果加入进来
-            ## write reccord bed
-            for rec in final_rec_ls:
-                fo2.write("{}\t{}\t{}\t{}\t{}\t{}\n".format(rec.chr_id, rec.start, rec.end, rec.operation, rec.info, rec.patch_id))
-            
-            # break
-    # Record.write_record() # 
-    fasta_parser.write_fasta_dict(consensus_fa_dic, consensus_fasta_out)
+    if config["apply_scaffod"]:
+        print("-----------------------apply_scaffod mode-----------------------")
+        connect_info_ls, patch_ids, consensus_fa_dic = SV_consensus_on_ref2(all_chrs, semi_candidate_op_dic, fa_for_consensus_dic, asm_fa_dic, asm_to_ref_bam, SVconsensus_bed_out, consensus_fasta_out, out_dir, threads, config)
+
+    else:
+        # pool = Pool(processes=threads)
+        # results = [pool.apply_async(SV_consensus_on_ref, args=(ctg, semi_candidate_op_dic[ctg], fa_for_consensus_dic, asm_fa_dic, asm_to_ref_bam, config)) for ctg in all_chrs]
+        # # results = [pool.apply_async(SV_consensus_on_ref, args=(ctg, semi_candidate_op_dic[ctg], ref_dic, asm_fa_dic, asm_to_ref_bam, Nfill_size)) for ctg in all_chrs]
+        # pool.close() # 关闭进程池，表示不能再往进程池中添加进程，需要在join之前调用
+        # pool.join() # 等待进程池中的所有进程执行完毕
+        # connect_info_ls = []
+        # final_rec_ls = []
+        # for i, res in enumerate(results):
+        #     ctg_final_rec_ls, connect_info, ctg_consensus_fa_dic = res.get()
+        #     # ctg = all_chrs[i]
+        #     connect_info_ls.append(connect_info)
+        #     consensus_fa_dic.update(ctg_consensus_fa_dic)   # 将每个线程的字典 consensus 结果加入进来
+        #     final_rec_ls.extend(ctg_final_rec_ls)
+        # Record.write_record(final_rec_ls, SVconsensus_bed_out)
+        # fasta_parser.write_fasta_dict(consensus_fa_dic, consensus_fasta_out)
+        # 
+        # ## patch_ids for next step
+        # patch_ids = set()
+        # with open(SVconsensus_bed_out, "r") as f:
+        #     for line in f:
+        #         if line.startswith("#"): continue
+        #         fields = line.strip().split("\t")   # 注意加上\t，兼容del
+        #         op_ls = fields[3].split(",")
+        #         patch_ls = fields[5].split(",")     # 
+        #         for i, op in enumerate(op_ls):
+        #             if op == "replace_with_denovo":
+        #                 for id in patch_ls:patch_ids.add(id)    #   replace这种也要排除
+        #             if op == "asm_patch":   # 用掉的碎片ctg
+        #                 patch_ids.add(patch_ls[i])
+        pass
     logger.info("consensus fasta write Done !!! ")
     logger.info("Run SV_consensus_on_ref Done !!! ")
     t7 = time.time()
@@ -1219,7 +1517,8 @@ def run_SVconsensus_parallel(out_dir, bam_in, process_ctg_ls,
 
     ## collect denovo fragemants
     denovo_fragments_fa = SV_consensus_dir + "/denovo_fragments.fasta"  # 组装碎片，主要指的是未用于填充修补的denovo结果
-    denovo_fragments_dic = get_frag_reads(denovo_fa, final_rec_bed=SVconsensus_bed_out) # 收集组装碎片
+    print(patch_ids)
+    denovo_fragments_dic = get_frag_reads(denovo_fa, patch_ids) # 收集组装碎片
     fasta_parser.write_fasta_dict(denovo_fragments_dic, denovo_fragments_fa)
     logger.info("denovo fragements write Done !!!")
 
@@ -1236,18 +1535,22 @@ def run_SVconsensus_parallel(out_dir, bam_in, process_ctg_ls,
                 denovo_merge_num += 1 
                 ## 记录连接信息吧
                 seq_id = ctg + "_fragemant"
-                connect_info_ls.append(apply_rec.Connect_info(seq_id, [seq_id], []))
+                connect_info_ls.append(Connect_info(seq_id, [seq_id], []))
         logger.info("merge {} fragements from denovo".format(denovo_merge_num))
         fasta_parser.write_fasta_dict(merge_fa_dic, merge_fa_out)
     else:   # 不需要合并，直接保留consensus结果
         # merge_fa_dic = consensus_fa_dic
         logger.info("keep same with consensus fasta")
         # shutil.copy(consensus_fasta_out, merge_fa_out)
-    ## 
+    ## 保持不变的contig
+    # for chr in keep_ls:
+    #     merge_fa_dic[chr] = ref_dic[chr]
+
+    ##
     merge_fa_dic.update(ctg_denovo_dic)     # 合并来自ctg asm的数据
     fasta_parser.write_fasta_dict(merge_fa_dic, merge_fa_out)
     connect_info_file = os.path.join(SV_consensus_dir, "connect.txt")
-    apply_rec.Connect_info.write_connect_info(connect_info_ls, connect_info_file)
+    Connect_info.write_connect_info(connect_info_ls, connect_info_file)
     logger.info("final merge fasta write Done !!!")
     t8 = time.time()
 

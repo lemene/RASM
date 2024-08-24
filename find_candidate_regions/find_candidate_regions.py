@@ -12,10 +12,23 @@ import gzip
 import subprocess
 import pandas as pd
 # from find_reg_by_depth import find_by_dp, find_by_dp2, get_dp_info_parallel, Depth_info      # vscode调
+# from find_from_pileup import parse_pileup_parallel
 from find_candidate_regions.find_reg_by_depth import find_by_dp, find_by_dp2, get_dp_info_parallel, Depth_info    # shell调
 from find_candidate_regions.find_from_pileup import parse_pileup_parallel
-Region = namedtuple('Region', ["chr_id", "start", "end"])   
+Region = namedtuple('Region', ["chr_id", "start", "end"])
 chr_info = namedtuple('chr_info', ["chr_id", "chr_len"])
+
+def write_dic(dic, fout):
+    data=pd.DataFrame(dic)
+    data.to_csv(fout, sep="\t", index=False)
+def write_dpinfo_dic(dp_info_dic:dict, fout):
+    data=pd.DataFrame(dp_info_dic)
+    data.to_csv(fout, sep="\t", index=False)
+    # with open(fout, "w") as f:
+    #     f.write("chr_id\tchr_len\tchr_dp\twin_size\tblock_size\tblock_num\tblock_dp_ls\n")
+    #     for dp_info in dp_info_dic.values():
+    #         f.write("{}\t{}\t{}\t{}\t{}\t{}\t{}\n".format(dp_info.chr_id, dp_info.chr_len, dp_info.chr_dp, dp_info.win_size, dp_info.block_size, dp_info.block_num, dp_info.block_dp_ls, ))
+
 
 def cal_sum(arry, l, r):
     # ans = 0
@@ -114,6 +127,7 @@ def cluster_regions2(reg_in):    # lowdep cluster return clustered regions in li
 
 def find_from_clip(bam_in, ctg, bed_out, MIN_CLIP_NUM, MIN_CLIP_LEN):  # find candidate regions by clips
     # region_ls_merge = []    # 保存所有ctg的region
+    print("Find from clip for {}".format(ctg))
     bam_index = bam_in + ".bai"
     bam_reader = pysam.AlignmentFile(bam_in, "rb", index_filename=bam_index)
     ctg_len = bam_reader.get_reference_length(ctg)  # 172126628
@@ -206,7 +220,6 @@ def bed_merge(fin_ls, fout):  # format: chr start   end   INFO
         ctg, start, end, info = res
         f_out.write("{}\t{}\t{}\t{}\n".format(ctg, start, end, info))
     f_out.close()
-        
 
 def get_dp_ls(dp_file):
     dp_ls = []
@@ -273,75 +286,83 @@ def run_find_candidate_parallel(bam_in, ctg_ls, out_dir, dp_file_dir, num_thread
     bed_out_merge = os.path.join(out_dir, "candidate.bed")
     bed_merge(bed_ls, bed_out_merge)
 
-def run_find_candidate2(bam_in, ctg, out_dir, config, dp_info_dic):
+def run_find_candidate2(bam_in, ctg, out_dir, config, dp_info_dic, data_type):
     # bam_reader = pysam.AlignmentFile(bam_in, "rb", index_filename=bam_in + ".bai")
     ## pipe
-    clip_params = config["clip_params"]
-    min_clip_num = clip_params["min_clip_num"]
-    min_clip_len = clip_params["min_clip_len"]
-    bed_out1 = os.path.join(out_dir, "clip", ctg+"_clip.bed")   # path/chr1_clip.bed
-    try:
-        find_from_clip(bam_in, ctg, bed_out1, min_clip_num, min_clip_len)
-    except Exception as e:
-        print(f"Error: {e}")
     # 
-    bed_out2 = os.path.join(out_dir, "cov", ctg+"_cov.bed")    # path/chr1_cov.bed
+    bed_out1 = os.path.join(out_dir, "cov", "parts", ctg+"_cov.bed")    # path/chr1_cov.bed
     dp_params = config["dp_params"]
     dp_info = dp_info_dic[ctg]
     try:
-        find_by_dp2(dp_params, dp_info, bed_out2) # dp_ls, dp_win_size, CHR_INFO, MIN_DP, MAX_DP, bed_out
+        find_by_dp2(dp_params, dp_info, bed_out1) # dp_ls, dp_win_size, CHR_INFO, MIN_DP, MAX_DP, bed_out
     except Exception as e:
+        print("find_by_dp2 failed")
+        print(f"Error: {e}")
+    
+    # 
+    clip_params = config["clip_params"]
+    # min_clip_num = clip_params["min_clip_num"]
+    min_clip_portion = clip_params["min_clip_portion"]
+    min_clip_num = min_clip_portion * dp_info.whole_dp
+    min_clip_len = clip_params["min_clip_len"]
+    print("{} min_clip_num:{}, min_clip_len:{}".format(ctg, min_clip_num, min_clip_len))
+    bed_out2 = os.path.join(out_dir, "clip", "parts", ctg+"_clip.bed")   # path/chr1_clip.bed
+    try:
+        find_from_clip(bam_in, ctg, bed_out2, min_clip_num, min_clip_len)
+    except Exception as e:
+        print("find_from_clip failed")
         print(f"Error: {e}")
     print("{} find by dp clip Done!!!".format(ctg))
 
-def write_dic(dic, fout):
-    data=pd.DataFrame(dic)
-    data.to_csv(fout, sep="\t", index=False)
-def write_dpinfo_dic(dp_info_dic:dict, fout):
-    data=pd.DataFrame(dp_info_dic)
-    data.to_csv(fout, sep="\t", index=False)
-    # with open(fout, "w") as f:
-    #     f.write("chr_id\tchr_len\tchr_dp\twin_size\tblock_size\tblock_num\tblock_dp_ls\n")
-    #     for dp_info in dp_info_dic.values():
-    #         f.write("{}\t{}\t{}\t{}\t{}\t{}\t{}\n".format(dp_info.chr_id, dp_info.chr_len, dp_info.chr_dp, dp_info.win_size, dp_info.block_size, dp_info.block_num, dp_info.block_dp_ls, ))
 
 def call_back(res):
     print(res)
 def error_call_back(error_code):
     print(error_code)
 
-def run_find_candidate2_parallel(ref, bam_in, ctg_ls, out_dir, threads, config):
+def run_find_candidate2_parallel(ref, bam_in, ctg_ls, out_dir, threads, config, args):
+    
     print("get_dp_info!!!")
     dp_win_size = config["dp_params"]["dp_win_size"]
     block_size = config["dp_params"]["block_size"]
-    ## 
-    dp_info_dic = get_dp_info_parallel(bam_in, threads, out_dir, dp_win_size, block_size)
+    min_MQ = config["dp_params"]["min_MQ"] # 20/0/1 may change for bettre
+    ## get dpinfo from mosdepth，include avg_depth
+    dp_info_dic = get_dp_info_parallel(bam_in, threads, out_dir, dp_win_size, block_size, min_MQ)
     print("get_dp_info done!!!")
 
     ## 
-    dirs = [os.path.join(out_dir, "clip"), os.path.join(out_dir, "cov")]
+    dirs = [os.path.join(out_dir, "clip", "parts"), os.path.join(out_dir,"cov", "parts")]
     for dir in dirs:
         if not os.path.exists(dir): os.makedirs(dir)
     pool = Pool(processes=threads)
     for ctg in ctg_ls:
-        pool.apply_async(run_find_candidate2, args=(bam_in, ctg, out_dir, config, dp_info_dic), callback=call_back, error_callback=error_call_back) 
+        pool.apply_async(run_find_candidate2, args=(bam_in, ctg, out_dir, config, dp_info_dic, args.data_type), callback=call_back, error_callback=error_call_back) 
     pool.close() # 关闭进程池，表示不能再往进程池中添加进程，需要在join之前调用
     pool.join() # 等待进程池中的所有进程执行完毕
     # for ctg in ctg_ls:
     #     run_find_candidate2(bam_in, ctg, out_dir, config, dp_info_dic)
-
     ## find from pileup
+    data_type = args.data_type
     if config["apply_pileup"]:
         print("apply pileup")
         pileup_dir = os.path.join(out_dir, "pileup")
         if not os.path.exists(pileup_dir):os.makedirs(pileup_dir)
-        parse_pileup_parallel(ctg_ls, ref, bam_in, threads, config["pileup_params"], pileup_dir)
+        parse_pileup_parallel(ctg_ls, ref, bam_in, threads, config["pileup_params"], pileup_dir, data_type)
     
     print("find_candidate done!!!")
 
 
     ## bed merge
-    bed_ls = []
+    merge_cmd1 = ["cat", out_dir + "/clip/parts/*clip.bed", "| sort -k 1,1 -k 2n,2", ">", out_dir + "/clip/candidate_clip.bed"]
+    merge_cmd2 = ["cat", out_dir + "/cov/parts/*cov.bed", "| sort -k 1,1 -k 2n,2", ">", out_dir + "/cov/candidate_cov.bed"]
+    subprocess.check_call(" ".join(merge_cmd1), shell=True)
+    subprocess.check_call(" ".join(merge_cmd2), shell=True)
+
+    merge_cmd = ["cat", out_dir + "/clip/candidate_clip.bed", out_dir + "/cov/candidate_cov.bed", out_dir + "/pileup/candidate_pileup.bed", "| sort -k 1,1 -k 2n,2", ">", out_dir + "/candidate.bed"]
+    subprocess.check_call(" ".join(merge_cmd), shell=True)
+
+    print("---------merge bed done-------")
+    '''bed_ls = []
     if config["apply_pileup"]:
         bed_ls.append(os.path.join(pileup_dir, "candidate_pileup.bed"))
     for ctg in ctg_ls:
@@ -350,7 +371,10 @@ def run_find_candidate2_parallel(ref, bam_in, ctg_ls, out_dir, threads, config):
     bed_out_merge = os.path.join(out_dir, "candidate.bed")
     # bed_merge(bed_ls, bed_out_merge)
     merge_cmd = ["cat", " ".join(bed_ls), "| sort -k 1,1 -k 2n,2", ">", bed_out_merge]
-    subprocess.check_call(" ".join(merge_cmd), shell=True)
+    subprocess.check_call(" ".join(merge_cmd), shell=True)'''
+
+    ## 
+    
 
 
 def main():
@@ -443,7 +467,15 @@ def main():
     print("------------------------merge candidate bed Done--------------------------")
 
 if __name__ == "__main__":
-    print("Begin")
+    out_dir = "/public/home/hpc214712170/Test/tests/melanogaster_ont/flye/my_pipe/step2_candidate_regions"
+    merge_cmd1 = ["cat", out_dir + "/clip/parts/*clip.bed", "| sort -k 1,1 -k 2n,2", ">", out_dir + "/clip/candidate_clip.bed"]
+    merge_cmd2 = ["cat", out_dir + "/clip/parts/*cov.bed", "| sort -k 1,1 -k 2n,2", ">", out_dir + "/cov/candidate_cov.bed"]
+    merge_cmd = ["cat", out_dir + "/clip/candidate_clip.bed", out_dir + "/cov/candidate_cov.bed", out_dir + "/clip/candidate_pileup.bed", "| sort -k 1,1 -k 2n,2", ">", out_dir + "/candidate.bed"]
+    print(" ".join(merge_cmd1))
+    print(" ".join(merge_cmd2))
+    
+    
+    '''print("Begin")
     import yaml
     bam_in = "/public/home/hpc214712170/Test/tests/chm13_hifi_ctgs/NC_18/my_pipe/step1_mapping/aln.sorted.bam"
     ctg_ls = ["NC_000018.10"]
@@ -453,5 +485,5 @@ if __name__ == "__main__":
     with open(config_file, "r")as f:
         config = yaml.safe_load(f.read())
     print(config)
-    run_find_candidate2_parallel(bam_in, ctg_ls, out_dir, threads, config)
+    run_find_candidate2_parallel(bam_in, ctg_ls, out_dir, threads, config)'''
     pass

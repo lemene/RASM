@@ -11,6 +11,14 @@ backup/
 lib/
 *.d
 *.o
+*.bed
+*.fasta
+*.bam
+*.log
+*.fa
+*.sam
+*.bam.bai
+*.bed2
 
 
 # 以“_”开头的名字不包含在项目中，用于自定义目录。

@@ -1,5 +1,5 @@
 import yaml
-from create_consensus_by_bed import fasta_parser, apply_rec
+from create_consensus_by_bed import fasta_parser
 from create_consensus_by_bed.Utils import Connect_info
 # import fasta_parser
 # from Utils import Connect_info
@@ -39,13 +39,16 @@ def scaffold(fa_in, connect_file, fa_out, config):
             continue
         ## 
         new_seq = ""
-        new_seq += fa_in_dic[info.connect_ls[0]]    # 加上首段seq
+        try:
+            new_seq += fa_in_dic[info.connect_ls[0]]    # 加上首段seq
+        except:
+            raise Exception("Scaffold序列不存在")  ## 有种可能是原序列不存在（抛光过程中丢弃了那条序列）
         scaffold_ls = [info.connect_ls[0]]
         cnt = 0
         for idx, seq_id in enumerate(info.connect_ls[1:]):  # 从第二个seq开始
             # 查询第i-1段与第i段之间的gap情况。注意上面是
             gap_len, gap_type = info.gap_ls[idx].split("_")
-            gap_len = int(gap_len)
+            gap_len = abs(int(gap_len))
             now_seq = fa_in_dic[seq_id] # 当前seq的序列
             if gap_type == "INV": # INV：不进行scaffolding， cut off
                 scaffold_id = info.chr_id + "_" + str(cnt)
@@ -144,8 +147,12 @@ if __name__ == "__main__":
     # scaffold(fa_in, connect_file, fa_out, N_fill_size)
     # t2 = time.time()
 
-    yaml_file = "/public/home/hpc214712170/shixf/new_code/assembly/Test_code/resolve_err/Pipe/create_consensus_by_bed/Config.yaml"
+    work_dir = "/public/home/hpc214712170/Test/tests/bench/reinhardtii_hifi/my_pipe2"
+    yaml_file = "/public/home/hpc214712170/Test/tests/bench/reinhardtii_hifi/Config.yaml"
     with open(yaml_file, "r") as f:
         config = yaml.safe_load(f.read())
         print(type(config), config)
-
+    fa_in = work_dir + "/step4_polish/racon.fasta"
+    connect_file =  work_dir + "/step3_SV_consensus/connect.txt"
+    fa_out = work_dir + "/step5_scaffolding/final.fasta"
+    scaffold(fa_in, connect_file, fa_out, config["step5"])

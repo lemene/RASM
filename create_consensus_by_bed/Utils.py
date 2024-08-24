@@ -6,6 +6,7 @@ import shutil
 import time
 import gzip
 from typing import Any
+from pathlib import Path
 # import numpy as np
 
 class Asm_Region():
@@ -108,6 +109,9 @@ class Record():
         self.loca = None    # 判断处于哪个部位
         self.ctg_len = None
         self.size = self.end - self.start
+        self.old_start = start
+        self.old_end = end
+        self.skip = False
     def add_info(self, info):   # 实例方法
         self.info = info
     def add_operation(self, operation):
@@ -123,13 +127,24 @@ class Record():
         return self.patch_id.split(",")
     def get_info_ls(self):
         return self.info.split(",")
+    def print_info(self):
+        for attr, value in vars(self).items():
+            print(attr + ":", value)
+    def __str__(self):
+        return (f"Record(chr_id={self.chr_id}, start={self.start}, end={self.end}, "
+                f"operation={self.operation}, patch_id={self.patch_id}, "
+                f"loca={self.loca}, ctg_len={self.ctg_len}, size={self.size}, "
+                f"old_start={self.old_start}, old_end={self.old_end}, skip={self.skip})")
+
+    def __repr__(self):
+        return self.__str__()
     ## 
     @staticmethod
     def write_record(record_ls, file_out):
         with open(file_out, "w") as fo:
-            fo.write("#chr\tstart\tend\toperation\tinfo\tpatch_id\n")
+            fo.write("#chr\tstart\tend\toperation\tinfo\tpatch_id\told_start\told_end\n")
             for rec in record_ls:
-                fo.write("{}\t{}\t{}\t{}\t{}\t{}\n".format(rec.chr_id, rec.start, rec.end, rec.operation, rec.info, rec.patch_id))
+                fo.write("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n".format(rec.chr_id, rec.start, rec.end, rec.operation, rec.info, rec.patch_id, rec.old_start, rec.old_end))
     @staticmethod
     def write_rec_short(record_ls, file_out):
         with open(file_out, "w") as fo:
@@ -145,7 +160,7 @@ class Record():
         with open(file_in, "r") as fin:
             for line in fin:
                 if line.startswith("#"): continue
-                chr_id, start, end, operation, info, patch_id = line.strip().split("\t")
+                chr_id, start, end, operation, info, patch_id = line.strip().split("\t")[:6]
                 start, end = int(start), int(end)
                 rec = Record(chr_id, start, end)
                 rec.add_patch_id(patch_id)
@@ -187,6 +202,9 @@ class Connect_info():
                     f.write("{}\t{}\t{}\n".format(chr_id, ",".join(connect_ls), ",".join(gap_ls)))
                 else:
                     f.write("{}\t{}\t{}\n".format(chr_id, ",".join(connect_ls), "."))
+    def __str__(self):
+        return f'Connect_info(chr_id={self.chr_id}, connect_ls={self.connect_ls}, gap_ls={self.gap_ls})'
+
 
 def write_connect_info(connect_info_ls:list, file):
     ## tab键分割，第一列记录chr_id，第二列记录connect_ls，第三列记录gap_ls
@@ -213,6 +231,30 @@ def run_cmd_ls(cmd_ls):
 def make_dir(dir):
     if not os.path.isdir(dir):
         os.makedirs(dir)
+def reg_to_id(reg):
+    return reg[0] + ":" + str(reg[1]) + "-" + str(reg[2])
+
+def id_to_reg(reg_str:str):
+    ctg = reg_str.split(":")[0]
+    start, end = reg_str.split(":")[1].split("-")
+    start, end = int(start), int(end)
+    return [ctg, start, end]
+
+
+def run_minimap2(target_fa, query_fa, data_type, threads, minimap_out, params_ls):     
+    ''' 运行minimap2 提供params '''
+    t1 = time.time()
+    params = " ".join([str(param) for param in params_ls])
+    minimap_cmd = ["/usr/bin/time -v minimap2", "-ax", "map-"+data_type, params, target_fa, query_fa, "-t", str(threads), ">", minimap_out]
+    logger.info("Running: %s", " ".join(minimap_cmd))
+    subprocess.check_call(" ".join(minimap_cmd), shell=True)
+    logger.info("Run minimap2 finished, cost {}s".format(time.time() - t1))
+def run_samtools(sam_in, samtools_out, threads):
+    t1 = time.time()
+    samtools_cmd = ["/usr/bin/time -v samtools", "sort", "-O", "BAM", "-@", str(threads), sam_in, "-o", samtools_out, "&&", "samtools", "index", "-@", str(threads), samtools_out]
+    logger.info("Running: %s", " ".join(samtools_cmd))
+    subprocess.check_call(" ".join(samtools_cmd), shell=True)
+    logger.info("Run samtools finished, cost {}s".format(time.time() - t1))
 
 logger = logging.getLogger()
 def _enable_logging(log_file, debug, overwrite):
@@ -348,9 +390,47 @@ def run_raven(fq_in, work_dir, threads, data_type, raven_options):
     '''usage: raven [options ...] <sequences> [<sequences> ...]'''
     pass
 
+def run_miniasm(fq_in, work_dir, threads, data_type, miniasm_options):
+    ''' from NieFan
+    minimap2 -x ava-ont -t32 all.fastq all.fastq | gzip -1 > reads.paf.gz
+    miniasm -f all.fastq reads.paf.gz > $genomeName.gfa
+    awk '/^S/{print ">"$2"\n"$3}' $genomeName.gfa > $genomeName.fasta
+    '''
+    '''
+    # Overlap for PacBio reads (or use "-x ava-ont" for nanopore read overlapping)
+    minimap2/minimap2 -x ava-pb -t8 pb-reads.fq pb-reads.fq | gzip -1 > reads.paf.gz
+    # Layout
+    miniasm/miniasm -f reads.fq reads.paf.gz > reads.gfa
+    '''
+    
+    if not os.path.isdir(work_dir):os.makedirs(work_dir)
+    # step1
+    minimap2_out = os.path.join(work_dir, "reads.paf.gz")
+    if data_type == "ont":
+        cmd1 = ["minimap2 -x ava-ont", "-t", str(threads), fq_in, fq_in, "| gzip -1 >", minimap2_out]
+        logger.info("Run: {}".format(cmd1))
+        subprocess.check_call(" ".join(cmd1), shell=True)
+    elif data_type == "hifi":
+        cmd1 = ["minimap2 -x ava-pb", "-t", str(threads), fq_in, fq_in, "| gzip -1 >", minimap2_out]
+        logger.info("Run: {}".format(cmd1))
+        subprocess.check_call(" ".join(cmd1), shell=True)
+    # step2
+    miniasm_out = os.path.join(work_dir, "reads.gfa")
+    cmd2 = ["miniasm -f", fq_in, minimap2_out, ">", miniasm_out]
+    logger.info("Run: {}".format(cmd2))
+    subprocess.check_call(" ".join(cmd2), shell=True)
+    # step3
+    # cmd_2 = ["awk", "\'/^S/{print \">\"$2;print $3}\'", work_dir + "/out.bp.p_ctg.gfa", ">", hifiasm_fa_out]
+    miniasm_fa_out = os.path.join(work_dir, "asm.fa")
+    cmd3 = ["awk", "\'/^S/{print \">\"$2;print $3}\'", miniasm_out, ">", miniasm_fa_out]
+    logger.info("Run: {}".format(cmd3))
+    subprocess.check_call(" ".join(cmd3), shell=True)
+    return miniasm_fa_out
+
 
 '''Run local denovo assembly'''
 def Run_for_denovo(fq_in, work_dir, threads, genome_size, data_type, config):
+    t0 = time.time()
     denovo_asm_params = config["denovo_asm"]
     tool = denovo_asm_params[data_type]  # 
     # tool_config = config["denovo_asm"]["tool_config"]
@@ -358,12 +438,21 @@ def Run_for_denovo(fq_in, work_dir, threads, genome_size, data_type, config):
     tool_options = " ".join(tool_option_ls)     # get the tool options of the specify tool
     print("Running {} options:{}".format(tool, tool_options))
     logger.info("Choose {} for local denovo".format(tool))
-    # if tool == "hifiasm": denovo_asm_out = run_hifiasm_hom(fq_in, work_dir + "/hifiasm", threads, data_type)
-    if tool == "hifiasm": denovo_asm_out = run_hifiasm(fq_in, work_dir + "/hifiasm", threads, data_type, tool_options)
-    elif tool == "shasta": denovo_asm_out = run_shasta(fq_in, work_dir + "/shasta", threads, data_type, tool_options)
-    elif tool == "wtdbg2": denovo_asm_out = run_wtdbg2(fq_in, work_dir + "/wtdbg2", threads, genome_size, data_type, tool_options)
-    elif tool == "flye": denovo_asm_out = run_flye(fq_in, work_dir + "/flye", threads, genome_size, data_type, tool_options)
-    else: raise("Error tool")
+    try:
+        # if tool == "hifiasm": denovo_asm_out = run_hifiasm_hom(fq_in, work_dir + "/hifiasm", threads, data_type)
+        if tool == "hifiasm": denovo_asm_out = run_hifiasm(fq_in, work_dir + "/hifiasm", threads, data_type, tool_options)
+        elif tool == "shasta": denovo_asm_out = run_shasta(fq_in, work_dir + "/shasta", threads, data_type, tool_options)
+        elif tool == "wtdbg2": denovo_asm_out = run_wtdbg2(fq_in, work_dir + "/wtdbg2", threads, genome_size, data_type, tool_options)
+        elif tool == "flye": denovo_asm_out = run_flye(fq_in, work_dir + "/flye", threads, genome_size, data_type, tool_options)
+        elif tool == "miniasm": denovo_asm_out = run_miniasm(fq_in, work_dir + "/miniasm", threads, data_type, tool_options)
+        else: raise("Error tool")
+    except Exception as e:
+        print("组装失败: ", e)
+        failed_asm = work_dir + "failed.fa"
+        failed_asm_path = Path(failed_asm)
+        failed_asm_path.touch()
+        return failed_asm
+    print("------------------------------------Assembly cost:{}s------------------------------------".format(time.time() - t0))
     return denovo_asm_out
 def Run_for_denovo2(fq_in, work_dir, threads, genome_size, data_type, config):
     denovo_asm_params = config["denovo_asm"]

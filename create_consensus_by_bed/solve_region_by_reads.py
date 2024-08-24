@@ -29,7 +29,9 @@ def convert_reference_pos_to_raw_pos2(read, candidate_pos):
     # return raw_ref_pos_map,read_length
     return raw_ref_pos_map
 def solve_by_reads(bam_in, ctg, start, end, Depthrec:DepthRec, config):
-    ''' 引入对区域depth的判断，若存在过高的depth，则False'''
+    '''
+    1、引入identity选择最优读数。计算方式：%identity based on NM 
+    2、引入对区域depth的判断，若存在过高的depth，则False'''
     print("*****{}:{}-{}*******".format(ctg, start, end))
     # dp_upper_bound = config["dp_upper_bound"]
     block_high_dp_bound = config["block_high_dp_bound"]
@@ -39,7 +41,7 @@ def solve_by_reads(bam_in, ctg, start, end, Depthrec:DepthRec, config):
     MIN_MAPPING_QUALITY = 40
     MIN_ALIGN_LENGTH = 10000
     MIN_ALIGN_RATE = 0.95
-    MIN_CLIP_LEN = 200  # 对ont不知是否要开大点
+    MIN_CLIP_LEN = 500  # 对ont不知是否要开大点
     bam_reader = pysam.AlignmentFile(bam_in, "rb", index_filename=bam_in+".bai")
     # support_reads_ls = []
     support_read_sim_ls = []
@@ -74,7 +76,7 @@ def solve_by_reads(bam_in, ctg, start, end, Depthrec:DepthRec, config):
         ref_to_read = convert_reference_pos_to_raw_pos2(best_read, [start, end])
         query_start = ref_to_read.get(start, -1)
         query_end = ref_to_read.get(end, -1)
-        if query_start < 0 or query_end < 0 or query_start > query_end :
+        if query_start < 0 or query_end < 0 or query_start > query_end:
             print("{}:{}-{} ERROR!!!".format(ctg, start, end))
             return (False, "", "")
         solve_seq = best_read.query_sequence[query_start:query_end]
