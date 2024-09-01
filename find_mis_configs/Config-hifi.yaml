@@ -44,10 +44,10 @@ step2:
     ins_threshold: 100
     del_threshold: 100
     min_clip_len: 500
-  filter:
-    min_span_num: 3
-    MIN_ALIGN_LENGTH: 10000
-    MIN_ALIGN_RATE: 0.95
-    ins_threshold: 100
-    del_threshold: 100
+#  filter:
+#    min_span_num: 3
+#    MIN_ALIGN_LENGTH: 10000
+#    MIN_ALIGN_RATE: 0.95
+#    ins_threshold: 100
+#    del_threshold: 100
 

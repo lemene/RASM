@@ -1,24 +1,19 @@
+#!/usr/bin/env python3
 import argparse
 import os
 import sys
 import pysam
 # import signal
 # import multiprocessing as mp
-from multiprocessing import Pool
-import random
 import time
-import re
 import subprocess
-from collections import namedtuple,defaultdict
-from Bio import Seq
 import shutil
 import logging
-import gzip
 import yaml
-from find_candidate_regions.find_candidate_regions import run_find_candidate_parallel, run_find_candidate2_parallel
+from find_candidate_regions.find_candidate_regions import run_find_candidate2_parallel
 from create_consensus_by_bed.get_fasta_consensus2 import run_SVconsensus_parallel
 from create_consensus_by_bed import fasta_parser, scaffold_by_rec, Utils
-from mis_find.find_mis_pipe import run_find_pipe
+from find_candidate_regions.find_mis_pipe import run_find_pipe
 import info_stats
 logger = logging.getLogger()
 def _enable_logging(log_file, debug, overwrite):
@@ -98,19 +93,19 @@ def main():
     parser.add_argument("--work-dir", dest="work_dir", required=True, help="work directory to output results")
     # parser.add_argument("--bam", dest="bam_in", required=True, help="bam file")
     parser.add_argument("--ref", dest="ref", required=True)
-    parser.add_argument("--fastq", dest="fastq", required=True, help="fastq reads file")
+    parser.add_argument("--fastq", dest="fastq", help="fastq reads file")
     ## 
     parser.add_argument("--data-type", dest="data_type", required=True, choices=["ont", "hifi", "pb"], help="fastq file type")
     parser.add_argument("-g", "--genome-size", dest="genome_size", default="100m", help="genome size end with: b,m,g")
     ### 性能参数
-    parser.add_argument("--min_clip_num", dest="min_clip_num", default=5, help="min_clip_num of window to be selected") # important
-    parser.add_argument("--min_clip_len", dest="min_clip_len", default=500, help="min_clip_len of clip to be selected as clip")
-    parser.add_argument("--dp-win-size", dest="dp_win_size", default=100, help="dp win_size")
-    parser.add_argument("--min-dep", dest="min_dep", default=10, help="dep threshold to be select as low dep region")
-    parser.add_argument("--max-dep", dest="max_dep", default=48, help="max dep threshold")  # ->后面改为随由平均cov来计算 (1.7 * avg cov)
-    parser.add_argument("--min-dep-reg", dest="min_dep_reg", default=100, help="minimum length of low dep region")
+    # parser.add_argument("--min_clip_num", dest="min_clip_num", default=5, help="min_clip_num of window to be selected") # important
+    # parser.add_argument("--min_clip_len", dest="min_clip_len", default=500, help="min_clip_len of clip to be selected as clip")
+    # parser.add_argument("--dp-win-size", dest="dp_win_size", default=100, help="dp win_size")
+    # parser.add_argument("--min-dep", dest="min_dep", default=10, help="dep threshold to be select as low dep region")
+    # parser.add_argument("--max-dep", dest="max_dep", default=48, help="max dep threshold")  # ->后面改为随由平均cov来计算 (1.7 * avg cov)
+    # parser.add_argument("--min-dep-reg", dest="min_dep_reg", default=100, help="minimum length of low dep region")
     parser.add_argument("--min-contig", dest="min_contig", help="skip SV consensus process contig shorter than this, keep with raw", default=20000, type=int)   # 200000 调 1,000,000     5,000,000
-    parser.add_argument("--fill-size", dest="Nfill_size", type=int, default=100, help="N_fill_size")
+    parser.add_argument("--fill-size", dest="Nfill_size", type=int, default=100, help="The N filling size for the assembly gap region.")
     # 区间聚类和延展参数
     # parser.add_argument("--cluster-params", dest="cluster_params")
     ### 选择性的性能参数，
@@ -123,7 +118,7 @@ def main():
     parser.add_argument("-R", dest="re_run", choices=["step1", "step2", "step3", "step4", "step5"], default=False, help="re_run step")
     ## 1、mis find mode
     parser.add_argument("--find_mis", dest="find_mis", default=False, action="store_true", help="Start find mode")
-    parser.add_argument("--min_span", dest="min_span", type=int, default=5)
+    # parser.add_argument("--min_span", dest="min_span", type=int, default=5)
     # parser.add_argument("--boundary", dest="boundary", default=3000, type=int)
     parser.add_argument("--bam", dest="bam")
     ## 2、correct mode。纠错模式？？？
@@ -144,8 +139,6 @@ def main():
     logger.info("Start my pipe to assembly")
     ### 绝对路径配置
     args.work_dir = os.path.abspath(args.work_dir)
-    args.ref = os.path.abspath(args.ref)
-    args.fatsq = os.path.abspath(args.fastq)
     ### 生成文件路径配置
     work_dir = args.work_dir
     ref_dir = work_dir + "/" + "corrected_ref"
@@ -166,11 +159,14 @@ def main():
         print("Reads type could be either 'ont' or 'hifi' or 'pb'", file=sys.stderr)
         exit(1)
         # return 1
-    
+
     if args.find_mis or args.correct:
+        args.bam = os.path.abspath(args.bam)
         file_check(args.bam)
     else:
+        args.fatsq = os.path.abspath(args.fastq)
         file_check(args.fastq)
+    args.ref = os.path.abspath(args.ref)
     file_check(args.ref)
     file_check(args.config)
     ## 一些参数的获取
@@ -380,4 +376,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    pass

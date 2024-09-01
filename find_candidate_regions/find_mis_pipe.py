@@ -4,7 +4,6 @@ import logging
 import math
 import signal
 import sys
-sys.path.append("/public/home/hpc214712170/shixf/new_code/assembly/Test_code/resolve_err/Pipe")
 import os
 from multiprocessing import Pool
 import re
@@ -13,7 +12,7 @@ import numpy as np
 import yaml
 import pysam
 from collections import defaultdict, Counter
-from find_candidate_regions.find_reg_by_depth import Depth_info, get_dp, read_mosdepth_dp_file, get_dp_info_parallel
+from find_reg_by_depth import Depth_info, get_dp, read_mosdepth_dp_file, get_dp_info_parallel
 # import collect_signature, cluster_sigs    # vscode
 import mis_find.collect_signature, mis_find.cluster_sigs
 def make_dir(dir):
@@ -713,7 +712,7 @@ def find_candidate(ctg, reg_start, reg_end, ref, bam, out_dir, dp_info:Depth_inf
         f3.write("{}\t{}\t{}\t{}\t{}\n".format(chr, start, end, ls1, ls2))
 
     ### -----------------------三、Filter-----------------------
-    filter(bam, ctg, reg_start, reg_end, ctg_len, clu_ls, out_dir)
+    # filter(bam, ctg, reg_start, reg_end, ctg_len, clu_ls, out_dir)
     filter2(bam, ctg, reg_start, reg_end, ctg_len, clu_ls, out_dir, config)
     
     f1.close()
@@ -740,7 +739,7 @@ def run_find_pipe(ref, bam, ctg_ls, out_dir, threads, config):
     info_bed_dir = os.path.join(out_dir, "info")
     if not os.path.isdir(info_bed_dir):os.mkdir(info_bed_dir)
     filtered_dir = os.path.join(out_dir, "filtered")
-    if not os.path.isdir(filtered_dir):os.mkdir(filtered_dir)
+    # if not os.path.isdir(filtered_dir):os.mkdir(filtered_dir)
     filtered2_dir = os.path.join(out_dir, "filtered2")
     if not os.path.isdir(filtered2_dir):os.mkdir(filtered2_dir)
     pileup_dir = os.path.join(out_dir, "pileup")
@@ -750,7 +749,7 @@ def run_find_pipe(ref, bam, ctg_ls, out_dir, threads, config):
     # subprocess.check_call(" ".join(rm_cmd1), shell=True)
     # subprocess.check_call(" ".join(rm_cmd2), shell=True)    
     # clear filtered dir
-    clear_bed_files(filtered_dir)
+    # clear_bed_files(filtered_dir)
     clear_bed_files(filtered2_dir)
     # run find
     pool = Pool(processes=threads)
@@ -764,15 +763,15 @@ def run_find_pipe(ref, bam, ctg_ls, out_dir, threads, config):
     pool.join() # 等待进程池中的所有进程执行完毕
     print("----------------------find candidate done----------------------")
     # 
-    merge_dir = filtered_dir + "/merge"
+    # merge_dir = filtered_dir + "/merge"
     merge_dir2 = filtered2_dir + "/merge"
-    merge_bed = merge_dir + "/merge.bed"
+    # merge_bed = merge_dir + "/merge.bed"
     merge_bed2 = merge_dir2 + "/merge.bed"
-    make_dir(merge_dir)
+    # make_dir(merge_dir)
     make_dir(merge_dir2)
-    merge_cmd1 = ["cat", filtered_dir+"/*.bed", ">", merge_bed]
+    # merge_cmd1 = ["cat", filtered_dir+"/*.bed", ">", merge_bed]
     merge_cmd2 = ["cat", filtered2_dir+"/*.bed", ">", merge_bed2]
-    subprocess.check_call(" ".join(merge_cmd1), shell=True)
+    # subprocess.check_call(" ".join(merge_cmd1), shell=True)
     subprocess.check_call(" ".join(merge_cmd2), shell=True)
     # post process
     '''merge_bed = candidate_dir+"/merge.clu1.bed"
@@ -937,7 +936,7 @@ if __name__ == "__main__":
     # print(res)
     # exit(1)
     ## 
-    candidate_dir = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/yeast2/my_pipe/step2_candidate_regions/candidate"
+    '''candidate_dir = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/yeast2/my_pipe/step2_candidate_regions/candidate"
     merge_bed = candidate_dir+"/merge.clu1.bed"
     merge_cmd = ["cat", candidate_dir+"/*clu1.bed", "| cut -f1-3", ">", merge_bed]
     subprocess.check_call(" ".join(merge_cmd), shell=True)
@@ -969,7 +968,7 @@ if __name__ == "__main__":
         # collect_signature.single_pipe(bam, min_length, min_mapq, max_split_parts, min_read_len, sigs_dir, 
         #         task, min_siglength, merge_del_threshold, merge_ins_threshold, MaxSize, candidate_reg_dic[ctg])
     pool.close() # 关闭进程池，表示不能再往进程池中添加进程，需要在join之前调用
-    pool.join() # 等待进程池中的所有进程执行完毕
+    pool.join() # 等待进程池中的所有进程执行完毕'''
     # for reg in candidate_reg_ls:
     #     collect_signature.single_pipe(bam, min_length, min_mapq, max_split_parts, min_read_len, out_dir, 
     #             reg, min_siglength, merge_del_threshold, merge_ins_threshold, MaxSize, None)
