@@ -23,8 +23,6 @@ log_
 *.bin
 *.fastq
 *.gfa
-compare_tests
-Scripts/Simulate_Generate
 
 # 以“_”开头的名字不包含在项目中，用于自定义目录。
 __pycache__*
