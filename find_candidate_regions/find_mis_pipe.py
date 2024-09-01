@@ -14,7 +14,6 @@ import pysam
 from collections import defaultdict, Counter
 from find_reg_by_depth import Depth_info, get_dp, read_mosdepth_dp_file, get_dp_info_parallel
 # import collect_signature, cluster_sigs    # vscode
-import mis_find.collect_signature, mis_find.cluster_sigs
 def make_dir(dir):
     if not os.path.isdir(dir):
         os.makedirs(dir)

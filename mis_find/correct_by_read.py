@@ -1,5 +1,0 @@
-
-
-def correct():
-    # bam =
-    pass
