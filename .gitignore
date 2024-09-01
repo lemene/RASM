@@ -28,3 +28,7 @@ log_
 __pycache__*
 
 .idea
+Deprecated_code
+compare_tests
+search_params
+find_candidate_regions/test*
