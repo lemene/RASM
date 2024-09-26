@@ -12,7 +12,7 @@ import numpy as np
 import yaml
 import pysam
 from collections import defaultdict, Counter
-from find_reg_by_depth import Depth_info, get_dp, read_mosdepth_dp_file, get_dp_info_parallel
+from find_candidate_regions.find_reg_by_depth import Depth_info, get_dp, read_mosdepth_dp_file, get_dp_info_parallel
 # import collect_signature, cluster_sigs    # vscode
 def make_dir(dir):
     if not os.path.isdir(dir):

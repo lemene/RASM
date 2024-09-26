@@ -2,6 +2,8 @@
 import os
 import sys
 from collections import defaultdict
+import argparse
+import traceback
 
 '''
 precision=TP/(TP+FP)
@@ -248,76 +250,41 @@ def evalAll(bed1, bed2, failed_bed, false_bed, ex_ls, threshold=0, bias=0):
     fo.close()
     return Recall_val, Precise_val, F1_val, mis_num, call_num
 
+
+def load_exclude_info(fname):
+    exclude = []
+    if fname:
+        with open(fname, "r") as f:
+            for line in f:
+                if line.startswith("#"):continue
+                line = line.strip()
+                if line:
+                    exclude.append(line)
+    return exclude
+
 if __name__ == "__main__":
-    ## 
-    # python /public/home/hpc214712170/shixf/new_code/assembly/Test_code/resolve_err/Pipe/compare_tests/Eval__mis_SV/Eval_mis_find.py ../../../../../quast_eval_large/contigs_reports/mis_cl.bed merge.bed 0 0 ../../../../../quast_eval_large/contigs_reports/ex.txt
-    bed1 = sys.argv[1]  # truth bed
-    bed2 = sys.argv[2]   # calling bed for eval
-    # failed_bed = sys.argv[3] # failed bed
-    # false_bed = sys.argv[4]
-    false_bed = bed2 + ".false.bed"
-    failed_bed = bed2 + ".failed.bed"
-    threshold = float(sys.argv[3])
-    bias = int(sys.argv[4])
-    ex_f = sys.argv[5]
-    ex_ls = []
-    with open(ex_f, "r") as f:
-        for line in f:
-            if line.startswith("#"):continue
-            if line:
-                ex_ls.append(line.strip())
-    # print("ex_ls:", ex_ls)
-    print("threshold:", threshold, "bias:", bias)
-    Recall_val, Precise_val, F1_val, mis_num, call_num = evalAll(bed1, bed2, failed_bed, false_bed, ex_ls, threshold, bias)
-    print("{}|{}|{}|{}".format(Recall_val, Precise_val, F1_val, call_num))
-    exit()
-    #################################################   For single simu data
-    ex_ls = []
-    bed1 = sys.argv[1]  # truth bed
-    bed2 = sys.argv[2]   # calling bed for eval
-    # failed_bed = sys.argv[3] # failed bed
-    # false_bed = sys.argv[4]
-    false_bed = bed2 + ".false.bed"
-    failed_bed = bed2 + ".failed.bed"
-    threshold = float(sys.argv[3])
-    bias = int(sys.argv[4])
-    print("threshold:", threshold, "bias:", bias)
-    Recall_val, Precise_val, F1_val, mis_num, call_num = evalAll(bed1, bed2, failed_bed, false_bed, ex_ls, threshold, bias)
-    print("{}|{}|{}|{}".format(Recall_val, Precise_val, F1_val, call_num))
-    exit()
-    #################################################   For simu data parallel
-    ex_ls = []
-    # sample = "sativa"
-    # sample = "chm13"
-    sample = "GRCH38"
-    # data_type = "ont"
-    # data_type = "hifi"
-    data_type = "clr"
-    res1 = "filtered/merge/merge.bed"
-    res2 = "filtered2/merge/merge.bed"
-    quast1 = "quast"
-    quast2 = "quast_large"
-    threshold = 0
-    bias = 2000
-    bed1 = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/" + sample + "/simu/Ref/mis_simu.bed"
-    work_dir = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/" + sample + "/" + data_type
-    # dic = {"gaep":"gaep/mis_breakpoints.txt", "craq":"craq_out/runAQI_out/mis.bed", "inspector":"inspector/structural_error.bed", "quast":"quast_large/contigs_reports/mis.bed", "my_pipe":"my_pipe/step2_candidate_regions/filtered2/merge.bed"}   # filtered | filtered2
-    dic = {"gaep":"gaep/mis_breakpoints.txt", "craq":"craq_out/runAQI_out/mis.bed", "inspector":"inspector/structural_error.bed", "quast":"quast/contigs_reports/mis.bed", "my_pipe":"my_pipe/step2_candidate_regions/" + res2}   # filtered | filtered2
-    tool_ls = ["gaep", "craq", "inspector", "quast", "my_pipe"]
-    print("threshold:{}, bias:{}".format(threshold, bias))
-    print("Truth:{}".format(bed1))
-    print("Sample:{}, type:{}".format(sample, data_type))
-    with open("/public/home/hpc214712170/shixf/new_code/assembly/Test_code/resolve_err/Pipe/compare_tests/Eval__mis_SV/eval/" + sample + "_" + data_type + "_stats", "w") as f:
-        for tool in tool_ls:
-            print("---------------------{}---------------------".format(tool))
-            # f.write("---------------------{}---------------------\n".format(tool))
-            bed2 = work_dir + "/" + dic[tool]
-            failed_bed = work_dir + "/" + dic[tool] + ".failed.bed"
-            false_bed = work_dir + "/" + dic[tool] + ".false.bed"
-            if os.path.isfile(bed2):
-                Recall_val, Precise_val, F1_val, mis_num, call_num = evalAll(bed1, bed2, failed_bed, false_bed, ex_ls, threshold, bias)
-                print("{}|{}|{}|{}".format(Recall_val, Precise_val, F1_val, call_num))
-                # f.write("{}|{}|{}\n".format(Recall_val, Precise_val, F1_val))
-            else:
-                print("{} is none".format(bed2))
-    pass
+    parser = argparse.ArgumentParser("统计binfo信息")
+    parser.add_argument("truth", type=str)
+    parser.add_argument("test", type=str)
+    parser.add_argument("threshold", type=float)
+    parser.add_argument("bias", type=int)
+    parser.add_argument("--exclude", type=str)
+
+
+    try:
+        args = parser.parse_args(sys.argv[1:])
+        bed1 = args.truth
+        bed2 = args.test
+        threshold = args.threshold
+        bias = args.bias
+        false_bed = bed2 + ".false.bed"
+        failed_bed = bed2 + ".failed.bed"
+        exclude = load_exclude_info(args.exclude)
+
+        Recall_val, Precise_val, F1_val, mis_num, call_num = evalAll(bed1, bed2, failed_bed, false_bed, exclude, threshold, bias)
+        print("{}|{}|{}|{}".format(Recall_val, Precise_val, F1_val, call_num))
+
+    except:
+        traceback.print_exc()
+        print("-----------------")
+        parser.print_usage()
