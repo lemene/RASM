@@ -474,16 +474,3 @@ if __name__ == "__main__":
     print(" ".join(merge_cmd1))
     print(" ".join(merge_cmd2))
     
-    
-    '''print("Begin")
-    import yaml
-    bam_in = "/public/home/hpc214712170/Test/tests/chm13_hifi_ctgs/NC_18/my_pipe/step1_mapping/aln.sorted.bam"
-    ctg_ls = ["NC_000018.10"]
-    out_dir = "/public/home/hpc214712170/Test/tests/chm13_hifi_ctgs/NC_18/my_pipe/test2"
-    threads = 2
-    config_file = "/public/home/hpc214712170/shixf/new_code/assembly/Test_code/resolve_err/Pipe/Configs/Config.yaml"
-    with open(config_file, "r")as f:
-        config = yaml.safe_load(f.read())
-    print(config)
-    run_find_candidate2_parallel(bam_in, ctg_ls, out_dir, threads, config)'''
-    pass

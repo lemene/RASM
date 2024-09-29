@@ -133,24 +133,12 @@ def eval(true_reg_ls, call_reg_ls, chr, threshold=0, bias=0):
         if i >= len(true_reg_ls) or j >= len(call_reg_ls): break
         if call(true_reg_ls[i], call_reg_ls[j], threshold, bias):
             precise_ls[j] += 1
-    ## stats
-    # print("Recall:{}".format(recall_ls))
-    # print("Precise:{}".format(precise_ls))
+
     recall_num = 0
     for i in recall_ls:
         if i > 0: recall_num += 1
-    # print("Recall rate:{}".format(recall_num / len(recall_ls)))
-    # print("Precise_rate:{}".format(sum(precise_ls) / len(precise_ls)))
-    # if len(recall_ls) > 0:
-    #     print("Recall rate:{}".format(stats_no_zero(recall_ls) / len(recall_ls)))
-    # else:
-    #     print("Recall rate:None")
-    # if len(precise_ls) > 0:
-    #     print("Precise rate:{}".format(stats_no_zero(precise_ls) / len(precise_ls)))
-    # else:
-    #     print("Precise rate:None")
+
     return recall_ls, precise_ls, succes_ls
-    # pass
 
 def cal_f1(precision, recall):
     # if precision

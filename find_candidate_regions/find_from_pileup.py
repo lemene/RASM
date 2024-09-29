@@ -40,74 +40,6 @@ def pileup_window_cal(pileup_dict):
             break
     return window_dict                                                        
             
-def pileupfile_parse(args):
-    """
-    process pileup file
-    """    
-    samfile=pysam.AlignmentFile(args.bam,"rb") 
-    contig_len=contig_pool(samfile)
-    prev_contig=None    
-    pileup_dict={"contig":[],"correct":[],"ambiguous":[],"insert":[],
-        "deletion":[],"disagree":[],"depth":[]} 
-    window_pileup_dict={"contig":[],"start_pos":[],"correct_portion":[],"ambiguous_portion":[],"disagree_portion":[],
-    "deletion_portion":[],"insert_portion":[],"normalized_coverage":[],"normalized_deviation":[],"mean_coverage":[]}  
-    for line in open(args.pileup,"r"):
-        record = line.strip().split('\t')
-        if contig_len[record[0]] < args.mlen:
-            continue
-        if prev_contig is None:
-            prev_contig=record[0]
-        if record[0] !=prev_contig:
-            window_data=pileup_window_cal(pileup_dict)
-            mean_cov=np.mean(window_data["coverage"])
-            window_pileup_dict["contig"].extend(window_data["contig"]) 
-            window_pileup_dict["start_pos"].extend(window_data["start_pos"]) 
-            window_pileup_dict["correct_portion"].extend(window_data["correct_portion"]) 
-            window_pileup_dict["ambiguous_portion"].extend(window_data["ambiguous_portion"]) 
-            window_pileup_dict["disagree_portion"].extend(window_data["disagree_portion"]) 
-            window_pileup_dict["deletion_portion"].extend(window_data["deletion_portion"])   
-            window_pileup_dict["insert_portion"].extend(window_data["insert_portion"])     
-            window_pileup_dict["normalized_coverage"].extend(window_data["coverage"]/mean_cov)
-            window_pileup_dict["normalized_deviation"].extend(window_data["deviation"])
-            window_pileup_dict["mean_coverage"].extend([mean_cov]*len(window_data["start_pos"]))                                           
-            pileup_dict={"contig":[],"correct":[],"ambiguous":[],"insert":[],"deletion":[],"disagree":[],"depth":[]}
-            prev_contig = record[0]
-        pileup_dict['contig'].append(record[0])
-        match_detail=record[4]        
-        pileup_dict['correct'].append(match_detail.count('.')+match_detail.count(','))
-        # pileup_dict['ambiguous'].append(match_detail.count('*'))
-        # pileup_dict['insert'].append(match_detail.count("+"))
-        # pileup_dict['deletion'].append(match_detail.count("-"))
-        pileup_dict['ambiguous'].append(match_detail.count('*'))
-        pileup_dict['insert'].append(match_detail.count("+"))   # 只能记录插入未知的数目，反映不了插入具体情况
-        pileup_dict['deletion'].append(match_detail.count("-"))
-        
-        pileup_dict['depth'].append(int(record[3]))
-        st = ''.join(re.split('[\+|\-][0-9]+[ATCGatcg]+',match_detail))
-        numd = st.count('a')+st.count('A')+st.count('t')+st.count('T')+st.count('c')+st.count('C')+st.count('g')+st.count('G')
-        pileup_dict['disagree'].append(numd)
-        # print(pileup_dict)
-    ## 
-    window_data=pileup_window_cal(pileup_dict)
-    mean_cov=np.mean(window_data["coverage"])   # cal mean cov of the contig
-    window_pileup_dict["contig"].extend(window_data["contig"])
-    window_pileup_dict["start_pos"].extend(window_data["start_pos"])
-    window_pileup_dict["correct_portion"].extend(window_data["correct_portion"])
-    window_pileup_dict["ambiguous_portion"].extend(window_data["ambiguous_portion"])
-    window_pileup_dict["disagree_portion"].extend(window_data["disagree_portion"])
-    window_pileup_dict["deletion_portion"].extend(window_data["deletion_portion"])
-    window_pileup_dict["insert_portion"].extend(window_data["insert_portion"])     
-    window_pileup_dict["normalized_coverage"].extend(window_data["coverage"]/mean_cov)
-    window_pileup_dict["normalized_deviation"].extend(window_data["deviation"])
-    window_pileup_dict["mean_coverage"].extend([mean_cov]*len(window_data["start_pos"]))
-
-    if not os.path.exists(os.path.join(args.output, "temp/pileup")):
-        os.makedirs(os.path.join(args.output, "temp/pileup"))
-    data=pd.DataFrame(window_pileup_dict)
-    data.to_csv(os.path.join(args.output, "temp/pileup/pileup_feature.txt"),sep="\t")
-    ## 
-    return data
-
 def cluster_reg(ls, dis):
     if not ls: return []
     new_ls = []
@@ -251,23 +183,6 @@ def parse_pileup_parallel(ctg_ls, ref, bam_in, threads, params, out_dir, data_ty
     subprocess.check_call(" ".join(bed_merge_cmd), shell=True)
     print("Run pileup parse Done!!!")
 
-def test():
-    ref = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/Test/tests/yeast_ont/my_pipe2/corrected_ref/reference.fasta"
-    bam_in = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/Test/tests/yeast_ont/my_pipe2/step1_mapping/aln.sorted.bam"
-    ctg_ls = pysam.AlignmentFile(bam_in, "rb", index_filename=bam_in + ".bai").references
-    threads = 10
-    params = {"win_size":1000, "step_size":500, "min_correct_portion":0.9, "max_differ_portion":0.1, "max_disagree_portion":0.02, "cluster_dis":1000, "reg_size":1000000}
-    out_dir = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/Test/tests/yeast_ont/my_pipe2/step2_candidate_regions/pileup"
-    parse_pileup_parallel(ctg_ls, ref, bam_in, threads, params, out_dir)
-def test1():
-    ref = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/Test/tests/yeast_ont/my_pipe2/corrected_ref/reference.fasta"
-    bam = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/Test/tests/yeast_ont/my_pipe2/step1_mapping/aln.sorted.bam"
-    ctg = "chrX"
-    start = 0
-    end = 725652
-    params = {"win_size":1000, "step_size":500, "min_correct_portion":0.9, "max_differ_portion":0.1, "max_disagree_portion":0.02, "cluster_dis":1000, "reg_size":1000000}
-    out_dir = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/Test/tests/yeast_ont/my_pipe2/step2_candidate_regions/pileup/parts"
-    parse_reg_pileup(ctg, start, end, ref, bam, out_dir, params)
 
 if __name__=='__main__':
     import yaml
@@ -290,38 +205,5 @@ if __name__=='__main__':
         params = config["pileup_params"]
         # print("pileup_params: ", params)
     parse_pileup_parallel(ctg_ls, ref, bam_in, threads, params, out_dir)
-    # test()
-    # test1()
-    # import time
-    # t1 = time.time()
-    # ctg = "NC_000023.11"
-    # # start = 115000000
-    # # end = 116000000
-    # start = 135000000
-    # end = 136000000
-    # # start = 135706000
-    # # end = 135714000
-    # # start = 0
-    # # end = 20000
-    # ref = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/Test/tests/chm13_ont/my_pipe/corrected_ref/reference.fasta"
-    # bam = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/Test/tests/chm13_ont/my_pipe/step1_mapping/aln.sorted.bam"
-    # params = {"win_size":1000, "step_size":500, "min_correct_portion":0.9, "max_differ_portion":0.1, "max_disagree_portion":0.02, "cluster_dis":1000, "reg_size":1000000}
-    # out_dir = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/Test/tests/chm13_ont/my_pipe/pileup/parts"
-    # # ls, dic = parse_reg_pileup(ctg, start, end, ref, bam, 200, 100, 0.9, 0.1, 1000)
-    # parse_reg_pileup(ctg, start, end, ref, bam, out_dir, params)
-    # print(time.time() - t1)
 
-    # ## 
-    # # ctg_ls = ["NC_000023.11"]
-    # ref = ref
-    # bam_in = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/Test/tests/chm13_ont/my_pipe/step1_mapping/aln.sorted.bam"
-    # ctg_ls = pysam.AlignmentFile(bam_in, "rb", index_filename=bam_in + ".bai").references
-    # threads = 40
-    # params = params
-    # out_dir = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/Test/tests/chm13_ont/my_pipe/pileup/all"
-    # # parse_pileup_parallel(ctg_ls, ref, bam_in, threads, params, out_dir)
-    # print(time.time() - t1)
-
-    # ## 
-    # pass
 

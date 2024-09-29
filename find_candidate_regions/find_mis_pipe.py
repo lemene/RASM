@@ -62,27 +62,6 @@ def exe(cmd, timeout=-1):
     retCode = proc.returncode
     return retCode,stdoutVal,stderrVal
 
-def call_back(res):
-    print(res)
-
-def error_call_back(error_code):
-    print(error_code)
-
-def clear_bed_files(directory):
-    # 构建文件匹配模式
-    pattern = os.path.join(directory, '*.bed')
-    # 使用glob找出所有匹配的文件
-    files = glob.glob(pattern)
-    if not files:
-        print(f"No '.bed' files found in directory {directory}")
-        return
-    for file in files:
-        try:
-            os.remove(file)
-            print(f"Removed file: {file}")
-        except OSError as e:
-            print(f"Error: {e.strerror}, while trying to remove file: {e.filename}")
-
 def cluster_by_dis(reg_ls_in, dis): # 根据距离进行聚类
     if len(reg_ls_in) <= 1:
         return reg_ls_in
@@ -167,15 +146,6 @@ def cal_cov_fraction(dp_ls, threshold):
         if dp < threshold:num += 1
     return num / size
 
-
-'''min_span_num = 2
-    min_supp_portion = 0.4  # 有多少成的读数表明没有mis
-    MIN_MAPPING_QUALITY = 20    # 10    map_Q太严了，导致大量的比对过滤掉了->3
-    MIN_ALIGN_LENGTH = 10000
-    MIN_ALIGN_RATE = 0.95
-    ins_threshold = 100
-    del_threshold = 100
-'''
 def win_check(ctg, start, end, ctg_len, bam_reader, params):
     print("Check:{}:{}-{}".format(ctg, start, end))
     '''
@@ -224,7 +194,6 @@ def win_check(ctg, start, end, ctg_len, bam_reader, params):
     
     #  
     if len(span_ls) < min_span_num and start >= 5000 and end <= ctg_len - 5000:
-        # filtered_ls.append([reg[0], reg[1], reg[2], "low_supp_mis"])
         return True, "low_supp_mis"
     else:
         min_span_num = max(min_span_num, math.ceil(min_supp_portion*len(span_ls)))
@@ -256,100 +225,8 @@ def win_check(ctg, start, end, ctg_len, bam_reader, params):
         else:
             return True, "Reads_mis"
 
-def filter(bam, ctg, reg_start, reg_end, ctg_len, clu_ls, out_dir):
-    bam_reader = pysam.AlignmentFile(bam, "rb", index_filename=bam + ".bai")
-    reg_id = ctg + ":" + str(reg_start) + "-" + str(reg_end)
-    print("Start classify and filter: {}:{}-{}".format(ctg, reg_start, reg_end))
-    filtered_dir = os.path.join(out_dir, "filtered")
-    filtered_bed = os.path.join(filtered_dir, reg_id + ".bed")
-    # 
-    # low_dp_threshold = 3
-    # low_cov_fraction = 0.1
-    # min_clip_ratio = 0.4
-    MIN_MAPPING_QUALITY = 20    # 10
-    boundary = 5000
-    min_span_num = 3
-    min_supp_portion = 0.2
-    MIN_ALIGN_LENGTH = 10000
-    MIN_ALIGN_RATE = 0.95
-    ins_threshold = 100
-    del_threshold = 100
-    filtered_ls = []
-    out_ls = []
-    # F1:
-    for reg in clu_ls:
-        ctg, start, end = reg
-        # filter boundary
-        # if (start < 1000 and end - start < boundary) or (end > ctg_len - 1000 and end - start < boundary): 
-        #     out_ls.append([reg, "boundary"])
-        #     continue
-        if start < 5000:
-            start = 5000
-        if end > ctg_len - 5000:
-            end = ctg_len - 5000
-        if end <= start or start > ctg_len or end <= 0:
-            out_ls.append([reg, "bounder"])
-            continue
-        # 
-        '''start_idx = start // stride
-        end_idx = (end - win_size) // stride if end < reg_end else win_num - 1
-        reg_dp_ls = [round(win_dp_ls[i], 4) for i in range(start_idx, end_idx + 1)]
-        reg_clip_ls = [round(win_clip_num[i], 4) for i in range(start_idx, end_idx + 1)]
-        avg_dp = np.mean(reg_dp_ls)
-        cov_fraction = cal_cov_fraction(reg_dp_ls, low_dp_threshold)'''
-        # Type 1
-        if reg[2] - reg[1] > 50000:
-            filtered_ls.append([reg[0], reg[1], reg[2], "Large_mis"])
-            continue
-        # 
-        '''left_idx = max(start - 4000, 0) // stride
-        right_idx = (end + 4000 - win_size) // stride if (end + 4000) < reg_end else win_num - 1
-        surround_dp_ls = []
-        for i in range(left_idx, start_idx):
-            surround_dp_ls.append(win_dp_ls[i])
-        for i in range(end_idx, right_idx):
-            surround_dp_ls.append(win_dp_ls[i])
-        surround_dp = np.median(surround_dp_ls)
-        clip_ratio = max(reg_clip_ls) // surround_dp if surround_dp != 0 else 0'''
-        span_ls = []
-        for read in bam_reader.fetch(ctg, start, end):
-            if read.is_unmapped or read.is_secondary or read.is_supplementary or read.mapping_quality < MIN_MAPPING_QUALITY or read.query_alignment_length < MIN_ALIGN_LENGTH or (read.query_alignment_length / read.query_length) < MIN_ALIGN_RATE:
-                continue
-            if read.reference_start < max(0, start - 500) and read.reference_end > min(ctg_len, end + 500):
-                span_ls.append(read)
-        #  
-        if len(span_ls) < min_span_num:
-            filtered_ls.append([reg[0], reg[1], reg[2], "low_supp_mis"])
-        else:
-            min_span_num = max(min_span_num, math.ceil(min_supp_portion*len(span_ls)))
-            # cal indel of the span
-            Inss_ls = []
-            Dels_ls = []
-            for i in range(len(span_ls)):   # 收集span_ls读数的indels
-                read = span_ls[i]
-                indels = cal_idels(read, start, end)    # max(0, start - 500), min(ctg_len, end + 500)
-                Inss_ls.append(indels[0])
-                Dels_ls.append(indels[1])
-            # 
-            Inss_ls.sort()
-            Dels_ls.sort()
-            # check indels
-            avg_ins = sum(Inss_ls[:min_span_num]) // min_span_num
-            avg_del = sum(Dels_ls[:min_span_num]) // min_span_num
-            if avg_ins < ins_threshold and avg_del < del_threshold: # no mis
-                out_ls.append([reg, "No_mis"])
-            else:
-                filtered_ls.append([reg[0], reg[1], reg[2], "Medium_mis"])
-    
-    ##
-    print("filtered_ls:", filtered_ls)
-    with open(filtered_bed, "w") as f:
-        for ele in filtered_ls:
-            f.write("{}\t{}\t{}\t{}\n".format(ele[0], ele[1], ele[2], ele[3]))
-    print("{}:{}-{} out_ls:{}".format(ctg, reg_start, reg_end, out_ls))
-    print("Stop classify and filter")
-
 def filter2(bam, ctg, reg_start, reg_end, ctg_len, clu_ls, out_dir, config):
+    
     ## classify and filter the reg
     '''
     过滤：
@@ -359,7 +236,7 @@ def filter2(bam, ctg, reg_start, reg_end, ctg_len, clu_ls, out_dir, config):
     1) 高倍重复区
     2) 嘈杂的区域
     '''
-    bam_reader = pysam.AlignmentFile(bam, "rb", index_filename=bam + ".bai")
+    bam_reader = pysam.AlignmentFile(bam, "rb")
     reg_id = ctg + ":" + str(reg_start) + "-" + str(reg_end)
     print("Start classify and filter2: {}:{}-{}".format(ctg, reg_start, reg_end))
     filtered_dir = os.path.join(out_dir, "filtered2")
@@ -407,66 +284,12 @@ def filter2(bam, ctg, reg_start, reg_end, ctg_len, clu_ls, out_dir, config):
                 win_end = min(end, win_end + check_win_size)
         if not flag:    # no mis
             out_ls.append([reg, "No_mis"])
-    # F1:
-    # for reg in clu_ls:
-    #     ctg, start, end = reg
-    #     # filter boundary
-    #     if (start < 1000 and end - start < boundary) or (end > ctg_len - 1000 and end - start < boundary): 
-    #         out_ls.append([reg, "boundary"])
-    #         continue
-        
-    #     # 
-    #     '''start_idx = start // stride
-    #     end_idx = (end - win_size) // stride if end < reg_end else win_num - 1
-    #     reg_dp_ls = [round(win_dp_ls[i], 4) for i in range(start_idx, end_idx + 1)]
-    #     reg_clip_ls = [round(win_clip_num[i], 4) for i in range(start_idx, end_idx + 1)]
-    #     avg_dp = np.mean(reg_dp_ls)
-    #     cov_fraction = cal_cov_fraction(reg_dp_ls, low_dp_threshold)'''
-    #     # Type 1
-    #     if reg[2] - reg[1] > 50000:
-    #         filtered_ls.append([reg[0], reg[1], reg[2], "Large_mis"])
-    #         continue
-    #     # 
-    #     '''left_idx = max(start - 4000, 0) // stride
-    #     right_idx = (end + 4000 - win_size) // stride if (end + 4000) < reg_end else win_num - 1
-    #     surround_dp_ls = []
-    #     for i in range(left_idx, start_idx):
-    #         surround_dp_ls.append(win_dp_ls[i])
-    #     for i in range(end_idx, right_idx):
-    #         surround_dp_ls.append(win_dp_ls[i])
-    #     surround_dp = np.median(surround_dp_ls)
-    #     clip_ratio = max(reg_clip_ls) // surround_dp if surround_dp != 0 else 0'''
-    #     span_ls = []
-    #     for read in bam_reader.fetch(ctg, start, end):
-    #         if read.is_unmapped or read.is_secondary or read.is_supplementary or read.mapping_quality < MIN_MAPPING_QUALITY or read.query_alignment_length < MIN_ALIGN_LENGTH or (read.query_alignment_length / read.query_length) < MIN_ALIGN_RATE:
-    #             continue
-    #         if read.reference_start < max(0, start - 500) and read.reference_end > min(ctg_len, end + 500):
-    #             span_ls.append(read)
-    #     #  
-    #     if len(span_ls) < min_span_num:
-    #         filtered_ls.append([reg[0], reg[1], reg[2], "low_supp_mis"])
-    #     else:
-    #         min_span_num = max(min_span_num, 0.2*len(span_ls))
-    #         # cal indel of the span
-    #         Inss_ls = []
-    #         Dels_ls = []
-    #         for i in range(len(span_ls)):   # 收集span_ls读数的indels
-    #             read = span_ls[i]
-    #             indels = cal_idels(read, start, end)    # max(0, start - 500), min(ctg_len, end + 500)
-    #             Inss_ls.append(indels[0])
-    #             Dels_ls.append(indels[1])
-    #         # 
-    #         Inss_ls.sort()
-    #         Dels_ls.sort()
-    #         # check indels
-    #         avg_ins = sum(Inss_ls[:min_span_num]) // min_span_num
-    #         avg_del = sum(Dels_ls[:min_span_num]) // min_span_num
-    #         if avg_ins < ins_threshold and avg_del < del_threshold: # no mis
-    #             out_ls.append([reg, "No_mis"])
-    #         else:
-    #             filtered_ls.append([reg[0], reg[1], reg[2], "Medium_mis"])
-    
-    ##
+   
+    print("--------------------------------------------xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+    print("--------------------------------------------xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+    print("--------------------------------------------xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+    print("--------------------------------------------xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+    print(filtered_bed)
     print("filtered_ls:", filtered_ls)
     with open(filtered_bed, "w") as f:
         for ele in filtered_ls:
@@ -475,7 +298,7 @@ def filter2(bam, ctg, reg_start, reg_end, ctg_len, clu_ls, out_dir, config):
     print("Stop classify and filter2")
 
 def find_candidate(ctg, reg_start, reg_end, ref, bam, out_dir, dp_info:Depth_info, config):
-    
+
     bam_reader = pysam.AlignmentFile(bam, "rb", index_filename=bam + ".bai")
     ctg_len = bam_reader.get_reference_length(ctg)
     print("Find mis for:{}:{}-{}".format(ctg, reg_start, reg_end))
@@ -522,10 +345,9 @@ def find_candidate(ctg, reg_start, reg_end, ref, bam, out_dir, dp_info:Depth_inf
     # for line in pileup_stream.split("\n"):
     with open(pileup_file, "r") as f:
         for line in f:
-            record = line.strip().split()
-            # print(record)
-            if not record:
-                continue
+            record = line.split()
+            assert len(record) == 6
+
             ## 
             pileup_dict['contig'].append(record[0])
             match_detail=record[4]
@@ -548,6 +370,7 @@ def find_candidate(ctg, reg_start, reg_end, ref, bam, out_dir, dp_info:Depth_inf
         ## 
         win_start = start + reg_start
         win_end = win_start + win_size if win_start + win_size < reg_end else reg_end
+
         total = np.sum(pileup_dict["depth"][start:end])
         window_pileup_dict["contig"].append(ctg)
         window_pileup_dict["start_pos"].append(win_start)
@@ -556,22 +379,15 @@ def find_candidate(ctg, reg_start, reg_end, ref, bam, out_dir, dp_info:Depth_inf
             window_pileup_dict["correct_portion"].append(np.nan)
             window_pileup_dict["differ_portion"].append(np.nan)
             window_pileup_dict["disagree_portion"].append(np.nan)
-            '''ls.append([ctg, start + reg_start, end + reg_start])'''
             continue
         window_pileup_dict["correct_portion"].append(np.sum(pileup_dict['correct'][start:end])/total)
         window_pileup_dict["disagree_portion"].append(np.sum(pileup_dict["disagree"][start:end])/total)
         window_pileup_dict["differ_portion"].append(np.sum(pileup_dict["differ"][start:end])/total) 
-        # print("{}-{}: correct:{},differ:{}".format(start + reg_start, end + reg_start, window_pileup_dict["correct_portion"][-1], window_pileup_dict["differ_portion"][-1]))
-        '''if window_pileup_dict["correct_portion"][-1] < min_correct_portion \
-            or window_pileup_dict["differ_portion"][-1] > max_differ_portion \
-            or window_pileup_dict["disagree_portion"][-1] > max_disagree_portion:
-            ls.append([ctg, start + reg_start, end + reg_start])'''
-    # pileup_out = out_dir + "/" + ctg + ":" + str(reg_start) + "-" + str(reg_end) + "_pileup_feature.txt"
-    # write_pileup_dic(window_pileup_dict, pileup_out)
+
     win_correct_portion = window_pileup_dict["correct_portion"]
     win_differ_portion = window_pileup_dict["differ_portion"]
     win_disagree_portion = window_pileup_dict["disagree_portion"]
-    print("Get pileup info done")
+
     # 2、get clip info
     print("Get clip info")
     clip_ls = [0] * reg_len # 记录contig每个位置>min_clip_len的clip数目
@@ -648,15 +464,6 @@ def find_candidate(ctg, reg_start, reg_end, ref, bam, out_dir, dp_info:Depth_inf
         '''筛选条件：dp、clip、pileup
         消融实验：
         '''
-        '''if win_dp_ls[i] <= lower_dp \
-            or win_dp_ls[i] >= upper_dp \
-            or win_clip_num[i] >= min_clip_num \
-            or win_correct_portion[i] <= min_correct_portion \
-            or win_differ_portion[i] >= max_differ_portion \
-            or win_disagree_portion[i] >= max_disagree_portion:
-            candidate_ls.append([ctg, win_start, win_end])
-            f2.write("{}\t{}\t{}\t{:.2f}\t{}\t{:.4f}\t{:.4f}\t{:.4f}\n".format(ctg, win_start, win_end, win_dp_ls[i], win_clip_num[i], win_correct_portion[i], win_differ_portion[i], win_disagree_portion[i]))
-            # print(win_start, "-", win_end)'''
 
         check = [False, False, False]
         if apply_dp:
@@ -674,18 +481,6 @@ def find_candidate(ctg, reg_start, reg_end, ref, bam, out_dir, dp_info:Depth_inf
         if check[0] or check[1] or check[2]:
             candidate_ls.append([ctg, win_start, win_end])
             f2.write("{}\t{}\t{}\t{:.2f}\t{}\t{:.4f}\t{:.4f}\t{:.4f}\t{}\n".format(ctg, win_start, win_end, win_dp_ls[i], win_clip_num[i], win_correct_portion[i], win_differ_portion[i], win_disagree_portion[i], check))
-        # if win_dp_ls[i] <= lower_dp:
-        #     print(win_start, "-", win_end, "type1")
-        # elif win_dp_ls[i] >= upper_dp:
-        #     print(win_start, "-", win_end, "type2")
-        # elif win_clip_num[i] >= min_clip_num:
-        #     print(win_start, "-", win_end, "type3")
-        # elif win_correct_portion[i] <= min_correct_portion:
-        #     print(win_start, "-", win_end, "type4")
-        # elif win_differ_portion[i] >= max_differ_portion:
-        #     print(win_start, "-", win_end, "type5")
-        # elif win_disagree_portion[i] >= max_disagree_portion:
-        #     print(win_start, "-", win_end, "type6")
     
     ## cluster by dis
     print("len(candidate_ls):", len(candidate_ls))
@@ -711,26 +506,18 @@ def find_candidate(ctg, reg_start, reg_end, ref, bam, out_dir, dp_info:Depth_inf
         f3.write("{}\t{}\t{}\t{}\t{}\n".format(chr, start, end, ls1, ls2))
 
     ### -----------------------三、Filter-----------------------
-    # filter(bam, ctg, reg_start, reg_end, ctg_len, clu_ls, out_dir)
     filter2(bam, ctg, reg_start, reg_end, ctg_len, clu_ls, out_dir, config)
-    
-    f1.close()
-    f2.close()
-    f3.close()
 
 
-def run_find_pipe(ref, bam, ctg_ls, out_dir, threads, config):
-    print("----------------find mis pipe----------------")
-    bam_reader = pysam.AlignmentFile(bam, "rb", index_filename=bam + ".bai")
-    ## ----------------0、get dp info----------------
-    print("----------------Start get_dp_info!!!----------------")
+def run_find_pipe(ref, bam, ctgs, out_dir, threads, config):
+
+    bam_reader = pysam.AlignmentFile(bam, "rb")
+
     dp_win_size = config["dp_params"]["dp_win_size"]
     block_size = config["dp_params"]["block_size"]
-    # min_MQ = 10     # for hifi assembly
     min_MQ = config['dp_params']['min_MQ']
-    dp_info_dic = get_dp_info_parallel(bam, threads, out_dir, dp_win_size, block_size, min_MQ)# get dpinfo from mosdepth，include avg_depth
-    print("----------------get_dp_info done!!!----------------")
-    
+    dp_info_dic = get_dp_info_parallel(bam, threads, out_dir, dp_win_size, block_size, min_MQ)
+
     ## ----------------1、find candidate----------------
     # dirs
     candidate_dir = os.path.join(out_dir, "candidate")
@@ -743,288 +530,12 @@ def run_find_pipe(ref, bam, ctg_ls, out_dir, threads, config):
     if not os.path.isdir(filtered2_dir):os.mkdir(filtered2_dir)
     pileup_dir = os.path.join(out_dir, "pileup")
     if not os.path.isdir(pileup_dir):os.mkdir(pileup_dir)
-    # rm_cmd1 = ["rm", filtered_dir+"/*.bed"]
-    # rm_cmd2 = ["rm", filtered2_dir+"/*.bed"]
-    # subprocess.check_call(" ".join(rm_cmd1), shell=True)
-    # subprocess.check_call(" ".join(rm_cmd2), shell=True)    
-    # clear filtered dir
-    # clear_bed_files(filtered_dir)
-    clear_bed_files(filtered2_dir)
+
     # run find
     pool = Pool(processes=threads)
-    for ctg in ctg_ls:
-        ctg_len = bam_reader.get_reference_length(ctg)
-        reg_start = 0
-        reg_end = ctg_len
-        # find_candidate(ctg, 0, ctg_len, ref, bam, out_dir, dp_info_dic[ctg], config)
-        pool.apply_async(find_candidate, args=(ctg, reg_start, reg_end, ref, bam, out_dir, dp_info_dic[ctg], config), callback=call_back, error_callback=error_call_back)
-    pool.close() # 关闭进程池，表示不能再往进程池中添加进程，需要在join之前调用
-    pool.join() # 等待进程池中的所有进程执行完毕
-    print("----------------------find candidate done----------------------")
-    # 
-    # merge_dir = filtered_dir + "/merge"
-    merge_dir2 = filtered2_dir + "/merge"
-    # merge_bed = merge_dir + "/merge.bed"
-    merge_bed2 = merge_dir2 + "/merge.bed"
-    # make_dir(merge_dir)
-    make_dir(merge_dir2)
-    # merge_cmd1 = ["cat", filtered_dir+"/*.bed", ">", merge_bed]
-    merge_cmd2 = ["cat", filtered2_dir+"/*.bed", ">", merge_bed2]
-    # subprocess.check_call(" ".join(merge_cmd1), shell=True)
-    subprocess.check_call(" ".join(merge_cmd2), shell=True)
-    # post process
-    '''merge_bed = candidate_dir+"/merge.clu1.bed"
-    merge_cmd = ["cat", candidate_dir+"/*clu1.bed", "| cut -f1-3", ">", merge_bed]
-    subprocess.check_call(" ".join(merge_cmd), shell=True)
-    candidate_reg_dic = defaultdict(list)
-    with open(merge_bed, "r") as f:
-        for line in f:
-            if line.startswith("#"): continue
-            ctg, start, end = line.strip().split("\t")
-            start, end = int(start), int(end)
-            candidate_reg_dic[ctg].append([start, end])'''
-    ## ----------------2、collect sigs from cigar parallel----------------
-    '''## ----------------2、collect sigs from cigar parallel----------------
-    # params
-    min_length = 30
-    min_mapq = 20
-    max_split_parts = 7
-    min_read_len = 500
-    min_siglength = 10
-    merge_del_threshold = 100     # 500   # sigs的合并距离
-    merge_ins_threshold = 100   # 500
-    MaxSize = 100000
-    # run
-    sigs_dir = out_dir + "/signatures"
-    if not os.path.isdir(sigs_dir):os.mkdir(sigs_dir)
-    pool = Pool(processes=threads)
-    for ctg in ctg_ls:
-        task = [ctg, 0, bam_reader.get_reference_length(ctg)]
-        pool.apply_async(collect_signature.single_pipe, args=(bam, min_length, min_mapq, max_split_parts, min_read_len, out_dir + "/", 
-                task, min_siglength, merge_del_threshold, merge_ins_threshold, MaxSize, candidate_reg_dic[ctg]), callback=call_back, error_callback=error_call_back)
-        # collect_signature.single_pipe(bam, min_length, min_mapq, max_split_parts, min_read_len, sigs_dir, 
-        #         task, min_siglength, merge_del_threshold, merge_ins_threshold, MaxSize, candidate_reg_dic[ctg])
-    pool.close() # 关闭进程池，表示不能再往进程池中添加进程，需要在join之前调用
-    pool.join() # 等待进程池中的所有进程执行完毕
+    for ctg in ctgs:
+        pool.apply_async(find_candidate, args=(ctg[0], 0, ctg[1], ref, bam, out_dir, dp_info_dic[ctg[0]], config))
     
-    ## ----------------3、cluster、filter----------------
-    pool = Pool(processes=threads)
-    for reg in candidate_reg_ls:
-        pool.apply_async(cluster_sigs.clustar_all, args=(bam, reg, out_dir, dp_info_dic))
-        pool.apply_async(cluster_sigs.clustar_inv, args=())
-    pool.close() # 关闭进程池，表示不能再往进程池中添加进程，需要在join之前调用
-    pool.join() # 等待进程池中的所有进程执行完毕
-    ## ----------------4、----------------'''
-    return
+    pool.close() 
+    pool.join()
 
-
-
-if __name__ == "__main__":
-    # print("Start")
-    # ctg = 'NC_001133.9'
-    # ctg = 'NC_001134.8'
-    # ctg = 'NC_001136.10'
-    # reg_start = 0
-    # reg_end = 230218
-    # ref = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/yeast2/GCF_000146045.fna"
-    # bam = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/yeast2/aln2alt.sort.bam"
-    # out_dir = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/yeast2/my_pipe/step2_candidate_regions"
-    
-    # bam_reader = pysam.AlignmentFile(bam, "rb", index_filename=bam + ".bai")
-    # chr_len = bam_reader.get_reference_length(ctg)
-    # reg_end = chr_len
-    # dp_win_size = 100
-    # # dp_out_file = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/yeast2/my_pipe/step2_candidate_regions/depths/NC_001133.9/NC_001133.9.regions.bed.gz"
-    # dp_dir = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/yeast2/my_pipe/step2_candidate_regions/depths"
-    # dp_out_file = os.path.join(dp_dir, ctg, ctg + ".regions.bed.gz")
-    # dp_ls = read_mosdepth_dp_file(dp_out_file)
-    # block_size = 10000000
-    # whole_dp = 37.75
-    # # dp_info = Depth_info(ctg, chr_len, dp_ls, dp_win_size, block_size, whole_dp)
-    # config_file = "/public/home/hpc214712170/shixf/new_code/assembly/Test_code/resolve_err/Pipe/find_mis_configs/Config.yaml"
-    # with open(config_file, "r") as f: # config参数获取
-    #     config = yaml.safe_load(f.read())     # 获取部分参数
-    # # find_candidate(ctg, reg_start, reg_end, ref, bam, out_dir, dp_info, config["step2"])
-    
-    # # Test
-    # '''pool = Pool(processes=20)
-    # bam_reader = pysam.AlignmentFile(bam, "rb", index_filename=bam + ".bai")
-    # for ctg in bam_reader.references:
-    #     chr_len = bam_reader.get_reference_length(ctg)
-    #     dp_dir = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/yeast2/my_pipe/step2_candidate_regions/depths"
-    #     dp_out_file = os.path.join(dp_dir, ctg, ctg + ".regions.bed.gz")
-    #     dp_ls = read_mosdepth_dp_file(dp_out_file)
-    #     dp_win_size = 100
-    #     block_size = 10000000
-    #     whole_dp = 37.75
-    #     dp_info = Depth_info(ctg, chr_len, dp_ls, dp_win_size, block_size, whole_dp)
-    #     # find_candidate(ctg, 0, bam_reader.get_reference_length(ctg), ref, bam, out_dir, dp_info, config["step2"])
-    #     pool.apply_async(find_candidate, args=(ctg, 0, bam_reader.get_reference_length(ctg), ref, bam, out_dir, dp_info, config["step2"]))
-    #     # pass
-    # pool.close() # 关闭进程池，表示不能再往进程池中添加进程，需要在join之前调用
-    # pool.join() # 等待进程池中的所有进程执行完毕'''
-    # # ref = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/chm13/simu/template_simu.fasta"
-    # # bam = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/chm13/simu/aln2simu.sort.bam"
-    # # out_dir = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/chm13/my_pipe/step2_candidate_regions"
-    # # bam_reader = pysam.AlignmentFile(bam, "rb", index_filename=bam + ".bai")
-    
-    # for ctg in bam_reader.references:
-    #     chr_len = bam_reader.get_reference_length(ctg)
-    #     dp_dir = out_dir + "/depths"
-    #     dp_out_file = os.path.join(dp_dir, ctg, ctg + ".regions.bed.gz")
-    #     dp_ls = read_mosdepth_dp_file(dp_out_file)
-    #     dp_win_size = 100
-    #     block_size = 10000000
-    #     whole_dp = 37.75
-    #     dp_info = Depth_info(ctg, chr_len, dp_ls, dp_win_size, block_size, whole_dp)
-    #     find_candidate(ctg, 0, bam_reader.get_reference_length(ctg), ref, bam, out_dir, dp_info, config["step2"])
-    # exit(1)
-
-
-    ##  ------------------------Test filter---------------------------
-    # out_dir = "/public/home/hpc214712170/Test/mis_detect/asm/thaliana_hifi/my_pipe/test"
-    # bam = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/Test/mis_detect/asm/thaliana_hifi/data/aln2asm.sort.bam"
-    # clu_dir = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/Test/mis_detect/asm/thaliana_hifi/my_pipe/step2_candidate_regions/candidate"
-    # 
-    config_file = "/public/home/hpc214712170/Test/mis_detect/asm/chm13_ont/flye/Config.yaml"
-    with open(config_file, "r") as f: # config参数获取
-        config = yaml.safe_load(f.read())     # 获取部分参数
-    bam = "/public/home/hpc214712170/Test/mis_detect/asm/chm13_ont/flye/data/aln2asm.sort.bam"
-    filtered_dir = "/public/home/hpc214712170/Test/mis_detect/asm/chm13_ont/flye/my_pipe/step2_candidate_regions/filtered2"
-    out_dir = "/public/home/hpc214712170/Test/mis_detect/asm/chm13_ont/flye/my_pipe/step2_candidate_regions"
-    clu_dir = "/public/home/hpc214712170/Test/mis_detect/asm/chm13_ont/flye/my_pipe/step2_candidate_regions/candidate"
-    bam_reader = pysam.AlignmentFile(bam, "rb", index_filename=bam + ".bai")
-    file_ls = os.listdir(clu_dir)
-    pool = Pool(processes=40)
-    for file in file_ls:
-        if file.endswith("clu1.bed"):
-            file_path = clu_dir + "/" + file
-            ctg = file.split(":")[0]
-            reg_start = 0
-            ctg_len = bam_reader.get_reference_length(ctg)
-            reg_end = ctg_len
-            clu_ls = []
-            with open(file_path, "r") as f:
-                for line in f:
-                    if not line: continue
-                    fields = line.strip().split("\t")
-                    ctg, start, end = fields[0:3]
-                    start, end = int(start), int(end)
-                    clu_ls.append([ctg, start, end])
-            # filter2(bam, ctg, reg_start, reg_end, ctg_len, clu_ls, out_dir, config['step2'])
-            pool.apply_async(filter2, args=(bam, ctg, reg_start, reg_end, ctg_len, clu_ls, out_dir, config['step2']), callback=call_back, error_callback=error_call_back)
-    # pool = Pool(processes=40)
-    # for reg in candidate_reg_ls:
-    #     pool.apply_async(filter, args=(), callback=call_back, error_callback=error_call_back)
-    #     # collect_signature.single_pipe(bam, min_length, min_mapq, max_split_parts, min_read_len, sigs_dir, 
-    #     #         task, min_siglength, merge_del_threshold, merge_ins_threshold, MaxSize, candidate_reg_dic[ctg])
-    pool.close() # 关闭进程池，表示不能再往进程池中添加进程，需要在join之前调用
-    pool.join() # 等待进程池中的所有进程执行完毕
-    merge_bed = filtered_dir + "/merge/merge.bed"
-    merge_cmd = ["cat", filtered_dir+"/*.bed", ">", merge_bed]
-    subprocess.check_call(" ".join(merge_cmd), shell=True)
-    exit(1)
-    ## win_check()
-    # params = config['step2']["filter2"]
-    # ctg = "contig_140"
-    # start = 71084200
-    # end = 71094200
-    # ctg_len = 72820461
-    # bam_reader = pysam.AlignmentFile(bam, "rb", index_filename=bam + ".bai")
-    # res = win_check(ctg, start, end, ctg_len, bam_reader, params)
-    # print(res)
-    # exit(1)
-    ## 
-    '''candidate_dir = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/yeast2/my_pipe/step2_candidate_regions/candidate"
-    merge_bed = candidate_dir+"/merge.clu1.bed"
-    merge_cmd = ["cat", candidate_dir+"/*clu1.bed", "| cut -f1-3", ">", merge_bed]
-    subprocess.check_call(" ".join(merge_cmd), shell=True)
-    candidate_reg_dic = defaultdict(list)
-    candidate_reg_ls = []
-    with open(merge_bed, "r") as f:
-        for line in f:
-            if line.startswith("#"): continue
-            ctg, start, end = line.strip().split("\t")
-            start, end = int(start), int(end)
-            candidate_reg_dic[ctg].append([start, end])
-            candidate_reg_ls.append([ctg, start, end])
-    min_length = 30
-    min_mapq = 20
-    max_split_parts = 7
-    min_read_len = 500
-    min_siglength = 10
-    merge_del_threshold = 100     # 500   # sigs的合并距离
-    merge_ins_threshold = 100   # 500
-    MaxSize = 100000
-    sigs_dir = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/yeast2/my_pipe/step2_candidate_regions/signatures"
-    out_dir = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/yeast2/my_pipe/step2_candidate_regions/"
-    if not os.path.isdir(sigs_dir):os.mkdir(sigs_dir)
-    pool = Pool(processes=20)
-    for reg in candidate_reg_ls:
-        task = reg
-        pool.apply_async(collect_signature.single_pipe, args=(bam, min_length, min_mapq, max_split_parts, min_read_len, out_dir, 
-                task, min_siglength, merge_del_threshold, merge_ins_threshold, MaxSize, None), callback=call_back, error_callback=error_call_back)
-        # collect_signature.single_pipe(bam, min_length, min_mapq, max_split_parts, min_read_len, sigs_dir, 
-        #         task, min_siglength, merge_del_threshold, merge_ins_threshold, MaxSize, candidate_reg_dic[ctg])
-    pool.close() # 关闭进程池，表示不能再往进程池中添加进程，需要在join之前调用
-    pool.join() # 等待进程池中的所有进程执行完毕'''
-    # for reg in candidate_reg_ls:
-    #     collect_signature.single_pipe(bam, min_length, min_mapq, max_split_parts, min_read_len, out_dir, 
-    #             reg, min_siglength, merge_del_threshold, merge_ins_threshold, MaxSize, None)
-    # temporary_dir = out_dir
-    # analysis_pools = Pool(processes=int(20))
-    # cmd_del = ("cat %ssignatures/*.bed | grep -w DEL | sort -u -T %s | sort -k 2,2 -k 3,3n -T %s > %sDEL.sigs"%(temporary_dir, temporary_dir, temporary_dir, temporary_dir))
-    # cmd_ins = ("cat %ssignatures/*.bed | grep -w INS | sort -u -T %s | sort -k 2,2 -k 3,3n -T %s > %sINS.sigs"%(temporary_dir, temporary_dir, temporary_dir, temporary_dir))
-    # cmd_inv = ("cat %ssignatures/*.bed | grep -w INV | sort -u -T %s | sort -k 2,2 -k 3,3 -k 4,4n -T %s > %sINV.sigs"%(temporary_dir, temporary_dir, temporary_dir, temporary_dir))
-    # cmd_tra = ("cat %ssignatures/*.bed | grep -w TRA | sort -u -T %s | sort -k 2,2 -k 5,5 -k 3,3 -k 4,4n -T %s > %sTRA.sigs"%(temporary_dir, temporary_dir, temporary_dir, temporary_dir))
-    # cmd_dup = ("cat %ssignatures/*.bed | grep -w DUP | sort -u -T %s | sort -k 1,1r -k 2,2 -k 3,4n -T %s > %sDUP.sigs"%(temporary_dir, temporary_dir, temporary_dir, temporary_dir))
-    # cmd_reads = ("cat %ssignatures/*.reads > %sreads.sigs"%(temporary_dir, temporary_dir))
-    # for i in [cmd_ins, cmd_del, cmd_dup, cmd_tra, cmd_inv, cmd_reads]:
-    #     analysis_pools.map_async(exe, (i,))
-    # analysis_pools.close()
-    # analysis_pools.join()
-    # run_pipe(ref, bam, bam_reader.references, out_dir, 20, config["step2"])
-    pass
-
-'''def find_candidate_parallel(ref, bam_in, ctg_ls, out_dir, threads, config, args):
-    print("get_dp_info!!!")
-    dp_win_size = config["dp_params"]["dp_win_size"]
-    block_size = config["dp_params"]["block_size"]
-    ## get dpinfo from mosdepth，include avg_depth
-    dp_info_dic = get_dp_info_parallel(bam_in, threads, out_dir, dp_win_size, block_size)
-    print("get_dp_info done!!!")
-
-    ## 
-    dirs = [os.path.join(out_dir, "clip"), os.path.join(out_dir, "cov")]
-    for dir in dirs:
-        if not os.path.exists(dir): os.makedirs(dir)
-    pool = Pool(processes=threads)
-    for ctg in ctg_ls:
-        pool.apply_async(run_find_candidate2, args=(bam_in, ctg, out_dir, config, dp_info_dic), callback=call_back, error_callback=error_call_back) 
-    pool.close() # 关闭进程池，表示不能再往进程池中添加进程，需要在join之前调用
-    pool.join() # 等待进程池中的所有进程执行完毕
-    # for ctg in ctg_ls:
-    #     run_find_candidate2(bam_in, ctg, out_dir, config, dp_info_dic)
-
-    ## find from pileup
-    if config["apply_pileup"]:
-        print("apply pileup")
-        pileup_dir = os.path.join(out_dir, "pileup")
-        if not os.path.exists(pileup_dir):os.makedirs(pileup_dir)
-        # parse_pileup_parallel(ctg_ls, ref, bam_in, threads, config["pileup_params"], pileup_dir)
-    
-    print("find_candidate done!!!")
-
-
-    ## bed merge
-    bed_ls = []
-    if config["apply_pileup"]:
-        bed_ls.append(os.path.join(pileup_dir, "candidate_pileup.bed"))
-    for ctg in ctg_ls:
-        bed_ls.append(os.path.join(out_dir, "clip", ctg+"_clip.bed"))
-        bed_ls.append(os.path.join(out_dir, "cov", ctg+"_cov.bed"))
-    bed_out_merge = os.path.join(out_dir, "candidate.bed")
-    # bed_merge(bed_ls, bed_out_merge)
-    merge_cmd = ["cat", " ".join(bed_ls), "| sort -k 1,1 -k 2n,2", ">", bed_out_merge]
-    subprocess.check_call(" ".join(merge_cmd), shell=True)'''
-# /public/home/hpc214712170/shixf/projects/ref-guided-assembly/Test/mis_detect/asm/chm13/my_pipe2/step2_candidate_regions/pileup/contig_598:0-110030683.pileup.txt

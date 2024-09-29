@@ -102,9 +102,6 @@ class Depth_info():
                 ## 
                 dp_info_dic[ctg_info_dic["chr_id"]] = ctg_info_dic
         return dp_info_dic
-    @staticmethod
-    def func():
-        return
 
 def get_Depth_info(chr_id, chr_len, dp_ls, dp_win_size, block_size, whole_dp):
     return Depth_info(chr_id, chr_len, dp_ls, dp_win_size, block_size, whole_dp)
@@ -156,26 +153,26 @@ def get_dp_info_parallel(bam_in, threads, out_dir, DP_WIN_SIZE, Block_size, min_
     dp_info_dir = os.path.join(out_dir, "dp_info")
     if not os.path.isdir(dp_file_dir):os.makedirs(dp_file_dir)
     if not os.path.isdir(dp_info_dir):os.makedirs(dp_info_dir)
-    bam_reader = pysam.AlignmentFile(bam_in, "rb", index_filename=bam_in+".bai") 
+
+    bam_reader = pysam.AlignmentFile(bam_in, "rb") 
     ctg_ls = bam_reader.references
     dp_dic = {}
     pool = Pool(processes=threads)
     results = [pool.apply_async(get_dp, args=(ctg, bam_in, dp_file_dir + "/" + ctg, DP_WIN_SIZE, min_MQ)) for ctg in ctg_ls]
     pool.close() # 关闭进程池，表示不能再往进程池中添加进程，需要在join之前调用
     pool.join() # 等待进程池中的所有进程执行完毕
+
     for res in results:
         dp_dic.update(res.get())    # 更新所有的
-    print("Get dp ls done")
+
     whole_dp_ls = []
     for ctg, ctg_dp_ls in dp_dic.items():
         whole_dp_ls.extend(ctg_dp_ls)
     whole_dp = np.median(whole_dp_ls)   # 全局的dp，使用中位数表示
     print("Whole dp: {} !!!".format(whole_dp))
+
     ## 
     dpinfo_dic = {}
-    # for ctg, ctg_dp_ls in dp_dic.items():   # 循环执行
-    #     ctg_len = bam_reader.get_reference_length(ctg)
-    #     dp_info_dic[ctg] = Depth_info(ctg, ctg_len, ctg_dp_ls, DP_WIN_SIZE, Block_size, whole_dp)
     
     results = []
     pool = Pool(processes=threads)
@@ -190,17 +187,6 @@ def get_dp_info_parallel(bam_in, threads, out_dir, DP_WIN_SIZE, Block_size, min_
         dpinfo_dic[ctg_dpinfo.chr_id] = ctg_dpinfo
     
     dp_info_file = dp_info_dir + "/" + "dpinfo.bed"
-    quantile_ls = []
-    num = 1000
-    for i in range(num):
-        quantile_ls.append(i * (1 / num))
-    with open(dp_info_dir + "/" + "whole_dpinfo_sum.bed", "w")as f:
-        f.write("avg_dp:{}\n".format(np.average(whole_dp_ls)))
-        # ls = np.quantile(whole_dp_ls, [0.05, 0.25, 0.5, 0.75, 0.95])
-        # f.write("0.05, 0.25, 0.5, 0.75, 0.95: {}\n".format(ls))
-        ls = np.quantile(whole_dp_ls, quantile_ls)
-        for i in range(len(quantile_ls)):
-            f.write("{}:{}\n".format(quantile_ls[i], ls[i]))
     Depth_info.write_dp_info(dpinfo_dic, dp_info_file)
     return dpinfo_dic
 
@@ -302,101 +288,3 @@ def find_by_dp2(dp_params, dp_info:Depth_info, bed_out):  # 传如dp列表，以
             fout.write("{}\t{}\t{}\t{}bp-cov_reg\n".format(reg.chr_id, reg.start, reg.end, reg.end-reg.start))
             # print("{}\t{}\t{} cov_reg".format(reg.chr_id, reg.start, reg.end))
     return final_ls
-
-
-def main():
-    import gzip
-    dp_file = "/public/home/hpc214712170/Test/tests/chm13_hifi_ctgs/NC_19/my_pipe/depths/NC_000019.10/NC_000019.10.regions.bed.gz"
-    dp_ls = []
-    with gzip.open(dp_file, "rt") as f:
-        for line in f:
-            fields = line.strip().split()
-            dp_ls.append(float(fields[3]))
-    dp_win_size = 100
-    CHR_INFO = chr_info("NC_000019.10", 58617616)
-    MIN_DP = 5
-    MAX_DP = 50
-    bed_out = "/public/home/hpc214712170/shixf/new_code/assembly/Test_code/resolve_err/Pipe/find_candidate_regions/test_find/find_from_cov.bed"
-    find_by_dp(dp_ls, dp_win_size, CHR_INFO, MIN_DP, MAX_DP, bed_out)
-
-    pass
-
-def test_mosdepth():
-    threads = 40
-    ctg_ls =  ['chrI', 'chrII', 'chrIII', 'chrIV', 'chrV', 'chrVI', 'chrVII', 'chrVIII', 'chrIX', 'chrX', 'chrXI', 'chrXII', 'chrXIII', 'chrXIV', 'chrXV', 'chrXVI', 'chrMT']
-    bam_in = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/Test/tests/yeast_ont/my_pipe3/step1_mapping/aln.sorted.bam"
-    out_dir = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/Test/tests/yeast_ont/my_pipe3/step2_candidate_regions/depths" 
-    DP_WIN_SIZE = 100
-    task_ls = []
-    for ctg in ctg_ls:
-        task_threads = 3
-        ctg_out_dir = out_dir + "/" + ctg
-        task_ls.append([ctg, bam_in, ctg_out_dir, DP_WIN_SIZE, task_threads])
-    ## 
-    t0 = time.time()
-    pool = Pool(processes=threads)
-    for task in task_ls:
-        print("Add {} to Pool".format(task[-1]))
-        pool.apply_async(run_mosdepth2, args=(task[0], task[1], task[2], task[3], task[4]))
-    pool.close() # 关闭进程池，表示不能再往进程池中添加进程，需要在join之前调用
-    pool.join() # 等待进程池中的所有进程执行完毕
-    t1 = time.time()
-    pool = Pool(processes=threads)
-    for task in task_ls:
-        print("Add {} to Pool".format(task[-1]))
-        pool.apply_async(run_mosdepth, args=(task[0], task[1], task[2], task[3]))
-    pool.close() # 关闭进程池，表示不能再往进程池中添加进程，需要在join之前调用
-    pool.join() # 等待进程池中的所有进程执行完毕
-    # pool = Pool(processes=threads)
-    # for task in task_ls:
-    #     print("Add {} to Pool".format(task[-1]))
-    #     pool.apply_async(run_mosdepth, args=(task[0], task[1], task[2], task[3]))
-    # pool.close() # 关闭进程池，表示不能再往进程池中添加进程，需要在join之前调用
-    # pool.join() # 等待进程池中的所有进程执行完毕
-    t2 = time.time()
-    print(t1 - t0, "\n", t2 - t1)
-if __name__ == "__main__":
-    test_mosdepth()
-    # dpinfo_file = "/public/home/hpc214712170/Test/tests/yeast_ont/test_dpinfo.txt"
-    # chr_id = "chr1"
-    # chr_len = 10000
-    # dp_ls = [2 for i in range(100)]
-    # dp_win_size = 100
-    # block_size = 1000
-    # whole_dp = 3
-    # dpinfo = get_Depth_info(chr_id, chr_len, dp_ls, dp_win_size, block_size, whole_dp)
-    # print(dpinfo.cov_ratio)
-    # Depth_info.write_dp_info({dpinfo.chr_id:dpinfo}, "/public/home/hpc214712170/Test/tests/yeast_ont/test_dpinfo.txt")
-    # dpinfo_dic = Depth_info.read_dp_info(dpinfo_file)
-    # print(dpinfo_dic)
-    # ls = [1,2]
-    # s1 = ",".join(ls)
-    # print(",".join(str(i) for i in [1,2,3]))
-    # with open("/public/home/hpc214712170/shixf/new_code/assembly/Test_code/resolve_err/Pipe/find_candidate_regions/test.txt", "w") as f:
-    #     f.write("{}".format(1))
-    file = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/Test/tests/yeast_ont/my_pipe3/step2_candidate_regions/dp_info/dpinfo.bed"
-    # dic = Depth_info.read_dp_info(file)
-    # print(dic)
-    ## Test find2
-    # import yaml
-    # config_file = "/public/home/hpc214712170/shixf/new_code/assembly/Test_code/resolve_err/Pipe/Configs/Config.yaml"
-    # with open(config_file, "r")as f:
-    #     config = yaml.safe_load(f.read())
-    # dp_params = config["dp_params"]
-    # bam_in = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/Test/tests/chm13_hifi_ctgs/NC_18/my_pipe/step1_mapping/aln.sorted.bam"
-    # threads = 2
-    # out_dir = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/Test/tests/chm13_hifi_ctgs/NC_18/my_pipe/test"
-    # DP_WIN_SIZE =100
-    # Block_size = 5000000
-    # ctg = "NC_000018.10"
-    # dp_info_dic = get_dp_info_parallel(bam_in, threads, out_dir, DP_WIN_SIZE, Block_size)
-    # bed_out = out_dir + "/" + ctg + ".cov.bed"
-    # find_by_dp2(dp_params, dp_info_dic[ctg], bed_out)
-
-
-    # main()
-    # chr_len = 21
-    # block_size = 10
-    # block_num = chr_len // block_size + 1 if chr_len % block_size > 0 else chr_len // block_size
-    # print(block_num)
-    pass
