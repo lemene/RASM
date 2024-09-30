@@ -57,6 +57,9 @@ def qv(fname):
             
 
 
+def test(fname):
+    bam = pysam.AlignmentFile(fname, "rb")
+    print(bam.get_reference_length("ctg0"))
 
 
 
@@ -75,6 +78,8 @@ def main(argv):
             coverage(args.bam)
         elif args.command == "qv":
             qv(args.test)
+        elif args.command == "test":
+            test(args.bam)
 
     except:
         traceback.print_exc()

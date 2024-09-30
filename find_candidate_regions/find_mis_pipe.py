@@ -1,15 +1,10 @@
 
-import glob
-import logging
 import math
-import signal
-import sys
 import os
 from multiprocessing import Pool
 import re
 import subprocess
 import numpy as np
-import yaml
 import pysam
 from collections import defaultdict, Counter
 from find_candidate_regions.find_reg_by_depth import Depth_info, get_dp, read_mosdepth_dp_file, get_dp_info_parallel
@@ -20,47 +15,6 @@ def make_dir(dir):
 def cal_sum(arry, l, r):
     return sum(arry[l:r])
 
-class Mis_Info():   # mis_info
-    def __init__(self, ctg, start, end, ) -> None:
-        self.ctg = ctg
-        self.start = start
-        self.end = end
-        # self.avg_dp = 
-        # self.correct_portion
-        # self.disagree_portion = 
-        # self.differ_portion = 
-        pass
-
-class Alarm(Exception):
-    pass
-
-def alarm_handler(signum, frame):
-    raise Alarm
-
-def exe(cmd, timeout=-1):
-    """
-    Executes a command through the shell.
-    timeout in minutes! so 1440 mean is 24 hours.
-    -1 means never
-    """
-    proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, \
-                            stderr=subprocess.STDOUT, close_fds=True,\
-                            preexec_fn=os.setsid)
-    signal.signal(signal.SIGALRM, alarm_handler)
-    if timeout > 0:
-        signal.alarm(int(timeout*60))  
-    try:
-        stdoutVal, stderrVal =  proc.communicate()
-        signal.alarm(0)  # reset the alarm
-    except Alarm:
-        logging.error(("Command was taking too long. "
-                       "Automatic Timeout Initiated after %d" % (timeout)))
-        os.killpg(proc.pid, signal.SIGTERM)
-        proc.kill()
-        return 214,None,None
-    
-    retCode = proc.returncode
-    return retCode,stdoutVal,stderrVal
 
 def cluster_by_dis(reg_ls_in, dis): # 根据距离进行聚类
     if len(reg_ls_in) <= 1:
@@ -293,49 +247,16 @@ def filter2(bam, ctg, reg_start, reg_end, ctg_len, clu_ls, out_dir, config):
     print("{}:{}-{} out_ls:{}".format(ctg, reg_start, reg_end, out_ls))
     print("Stop classify and filter2")
 
-def find_candidate(ctg, reg_start, reg_end, ref, bam, out_dir, dp_info:Depth_info, config):
 
-    bam_reader = pysam.AlignmentFile(bam, "rb", index_filename=bam + ".bai")
-    ctg_len = bam_reader.get_reference_length(ctg)
-    print("Find mis for:{}:{}-{}".format(ctg, reg_start, reg_end))
-
-    # OUT: 
-    # 
-    reg_len = reg_end - reg_start
-    win_size = config["win_size"]
-    stride = win_size // 2
-    win_num = (reg_len - win_size) // stride + 1 # 末端？？
-    # dp params
-    dp_params = config["dp_params"]
-    dp_lower_bound = dp_params["dp_lower_bound"]
-    dp_upper_bound = dp_params["dp_upper_bound"]
-    lower_dp = dp_info.whole_dp * dp_lower_bound
-    upper_dp = dp_info.whole_dp * dp_upper_bound
-    dp_ls = dp_info.dp_ls
-    dp_win_size = dp_info.win_size
-    
-    # clip params
-    clip_params = config["clip_params"]
-    min_clip_portion = clip_params["min_clip_portion"]
-    min_clip_num = min_clip_portion * dp_info.whole_dp
-    min_clip_len = clip_params["min_clip_len"]
-    # pileup params
-    pileup_params = config["pileup_params"]
-    win_size, step_size, min_correct_portion, max_differ_portion, max_disagree_portion, cluster_dis \
-        = pileup_params["win_size"], pileup_params["step_size"], pileup_params["min_correct_portion"], \
-        pileup_params["max_differ_portion"], pileup_params["max_disagree_portion"], pileup_params["cluster_dis"]
-    
-    ## -----------------------一、cal info-----------------------
-    # 1、get pileup info
+def get_pileup_info(pileup_params, ctg, reg_start, reg_end, out_dir, ref, bam, win_size, step_size):    
     min_MQ = pileup_params['min_MQ']
-    print("Get pileup info")
-    region = ctg + ":" + str(reg_start) + "-" + str(reg_end)
+
+    region = ctg + ":" + str(0) + "-" + str(reg_end)
     pileup_dir = os.path.join(out_dir, "pileup")
     pileup_file = os.path.join(pileup_dir, region + ".pileup.txt")
     pileup_cmd = ["samtools mpileup -B", "-q", str(min_MQ), "-aa", "-d 200","-r", region, "-f", ref, bam, "-o", pileup_file]
     subprocess.check_call(" ".join(pileup_cmd), shell=True)
-    # pileup_stream = pysam.mpileup("-B", "-q", "20", "-aa", "-d 100","-r", region, "-f", ref, bam)    # 计算pileup信息
-    print("Get pileup done")
+
     pileup_dict={"contig":[],"correct":[],"ambiguous":[],"insert":[],"deletion":[],
                  "disagree":[],"depth":[],"differ":[]}
     # for line in pileup_stream.split("\n"):
@@ -383,44 +304,82 @@ def find_candidate(ctg, reg_start, reg_end, ref, bam, out_dir, dp_info:Depth_inf
     win_correct_portion = window_pileup_dict["correct_portion"]
     win_differ_portion = window_pileup_dict["differ_portion"]
     win_disagree_portion = window_pileup_dict["disagree_portion"]
+    return win_correct_portion,  win_differ_portion, win_disagree_portion
 
-    # 2、get clip info
-    print("Get clip info")
-    clip_ls = [0] * reg_len # 记录contig每个位置>min_clip_len的clip数目
-    min_clip_len = 500      # 500 300
-    # MIN_MAPPING_QUALITY = 20    # 10
+
+def get_clip_info(ctg, clip_params, bam_reader, win_num, stride, win_size, min_clip_len):
+
+    ctg_len = bam_reader.get_reference_length(ctg)
+    clip_ls = [0] * ctg_len 
+
     min_MQ = clip_params['min_MQ']
-    for read in bam_reader.fetch(ctg, start=reg_start, end=reg_end):
+    for read in bam_reader.fetch(ctg):
         if read.is_unmapped or read.is_secondary or read.mapping_quality < min_MQ:
             continue
-        # ref_pos = read.reference_start
-        cigar = read.cigartuples
 
-        # left
-        left = cigar[0]
-        if left[0] == 4 or left[0] == 5:
-            if left[1] > min_clip_len:
+        left = read.cigartuples[0]
+        if (left[0] == 4 or left[0] == 5)  and left[1] >= min_clip_len:
                 clip_ls[read.reference_start] += 1
-        # right
-        right = cigar[-1]
-        if right[0] == 4 or right[0] == 5:
-            if right[1] > min_clip_len:
+
+        right = read.cigartuples[-1]
+        if (right[0] == 4 or right[0] == 5) and right[1] >= min_clip_len:
                 clip_ls[read.reference_end-1] += 1
-    win_clip_num = [0] * win_num    # clip num of a window
-    for i in range(win_num):    # i*stride, i*stride+win_size -> reg_start+i*stride, reg_start+i*stride+win_size
-        win_clip_num[i] = cal_sum(clip_ls, reg_start+i*stride, reg_start+i*stride+win_size) if reg_start+i*stride+win_size < reg_len else cal_sum(clip_ls, reg_start+i*stride, reg_len)
+                
+    win_clip_num = [0] * win_num
+    for i in range(win_num):   
+        win_clip_num[i] = sum(clip_ls[i*stride: min(i*stride+win_size, ctg_len)])
     
-    # 3、get dp info, skipped
-    print("Get dp info")
+    return win_clip_num
+
+def get_dp_info(win_num, stride, win_size, dp_win_size, dp_ls):
     win_dp_ls = [0] * win_num
     norm_win_size = win_size // dp_win_size
     norm_stride = stride // dp_win_size
-    bias = reg_start // dp_win_size
+    bias = 0 // dp_win_size
     for i in range(win_num):
         l = i * norm_stride + bias
         r = i * norm_stride + norm_win_size + bias if i * norm_stride + norm_win_size + bias <= len(dp_ls) else len(dp_ls)
         win_dp_ls[i] = cal_sum(dp_ls, l, r) / (r - l)
-        # print("{}, Win {}:".format(ctg, i), win_dp_ls[i], dp_ls[l:r])
+
+    return win_dp_ls
+
+def find_candidate(ctg, reg_start, reg_end, ref, bam, out_dir, dp_info:Depth_info, config):
+
+    bam_reader = pysam.AlignmentFile(bam, "rb", index_filename=bam + ".bai")
+    ctg_len = bam_reader.get_reference_length(ctg)
+    print("Find mis for:{}:{}-{}".format(ctg, reg_start, reg_end))
+
+    # OUT: 
+    # 
+    reg_len = reg_end - reg_start
+    win_size = config["win_size"]
+    stride = win_size // 2
+    win_num = (reg_len - win_size) // stride + 1 # 末端？？
+    # dp params
+    dp_params = config["dp_params"]
+    dp_lower_bound = dp_params["dp_lower_bound"]
+    dp_upper_bound = dp_params["dp_upper_bound"]
+    lower_dp = dp_info.whole_dp * dp_lower_bound
+    upper_dp = dp_info.whole_dp * dp_upper_bound
+    dp_ls = dp_info.dp_ls
+    dp_win_size = dp_info.win_size
+    
+    # clip params
+    clip_params = config["clip_params"]
+    min_clip_portion = clip_params["min_clip_portion"]
+    min_clip_num = min_clip_portion * dp_info.whole_dp
+    min_clip_len = clip_params["min_clip_len"]
+    # pileup params
+    pileup_params = config["pileup_params"]
+    win_size, step_size, min_correct_portion, max_differ_portion, max_disagree_portion, cluster_dis \
+        = pileup_params["win_size"], pileup_params["step_size"], pileup_params["min_correct_portion"], \
+        pileup_params["max_differ_portion"], pileup_params["max_disagree_portion"], pileup_params["cluster_dis"]
+    
+    ## -----------------------一、cal info-----------------------
+    win_correct_portion,  win_differ_portion, win_disagree_portion = get_pileup_info(pileup_params, ctg, reg_start, reg_end, out_dir, ref, bam, win_size, step_size)
+    win_clip_num = get_clip_info(ctg, clip_params, bam_reader, win_num, stride, win_size, min_clip_len)
+    win_dp_ls = get_dp_info(win_num, stride, win_size, dp_win_size, dp_ls)
+    
     
     ## -----------------------二、find regions-----------------------
     print("dp_lower_bound:{}, dp_upper_bound:{}, lower_dp:{}, upper_dp:{}".format(dp_lower_bound, dp_upper_bound, lower_dp, upper_dp))
@@ -477,10 +436,7 @@ def find_candidate(ctg, reg_start, reg_end, ref, bam, out_dir, dp_info:Depth_inf
             candidate_ls.append([ctg, win_start, win_end])
             f2.write("{}\t{}\t{}\t{:.2f}\t{}\t{:.4f}\t{:.4f}\t{:.4f}\t{}\n".format(ctg, win_start, win_end, win_dp_ls[i], win_clip_num[i], win_correct_portion[i], win_differ_portion[i], win_disagree_portion[i], check))
     
-    ## cluster by dis
-    print("len(candidate_ls):", len(candidate_ls))
+
     clu_ls = cluster_by_dis(candidate_ls, 5000)
-    print("len(clu_ls)", len(clu_ls))
     
-    ### -----------------------三、Filter-----------------------
     filter2(bam, ctg, reg_start, reg_end, ctg_len, clu_ls, out_dir, config)

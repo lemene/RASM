@@ -3,7 +3,7 @@
 import pandas as pd
 import numpy as np
 import math
-import sys,os,argparse,warnings
+import sys,os
 import pysam
 import collections
 import re
@@ -11,34 +11,8 @@ from multiprocessing import Pool
 import shutil
 import subprocess
 import time
-def contig_pool(samfile):
-    contig_len={}
-    for (ref,lens) in zip(samfile.references,samfile.lengths):
-        contig_len[ref]=lens
-    return contig_len
-         
-def pileup_window_cal(pileup_dict):
-    window_dict={"contig":[],"start_pos":[],"correct_portion":[],"ambiguous_portion":[],"disagree_portion":[],
-    "deletion_portion":[],"insert_portion":[],"coverage":[],"deviation":[]}
-    win_size = 1000
-    # for i in range(300,len(pileup_dict['correct']),100):
-    for i in range(0,len(pileup_dict['correct']),win_size):
-        start=i
-        end=i+1000
-        # end = i + 300
-        total=np.sum(pileup_dict['depth'][start:end])
-        window_dict["contig"].append(pileup_dict["contig"][0])
-        window_dict["start_pos"].append(start)
-        window_dict["correct_portion"].append(np.sum(pileup_dict['correct'][start:end])/total)
-        window_dict["ambiguous_portion"].append(np.sum(pileup_dict["ambiguous"][start:end])/total)        
-        window_dict["insert_portion"].append(np.sum(pileup_dict['insert'][start:end])/total)    
-        window_dict["deletion_portion"].append(np.sum(pileup_dict['deletion'][start:end])/total)   
-        window_dict["disagree_portion"].append(np.sum(pileup_dict['disagree'][start:end])/total) 
-        window_dict["coverage"].append(np.mean(pileup_dict["depth"][start:end]))
-        window_dict["deviation"].append(np.sqrt(np.var(pileup_dict["depth"][start:end]))/np.mean(pileup_dict["depth"][start:end]))        
-        if len(pileup_dict['correct']) - (i+100) <= 300:
-            break
-    return window_dict                                                        
+
+                                                            
             
 def cluster_reg(ls, dis):
     if not ls: return []
@@ -65,6 +39,7 @@ def write_pileup_dic(window_pileup_dict, f_out):
 def parse_reg_pileup(ctg, reg_start, reg_end, ref, bam, out_dir, params, data_type):
     ''' cal pileup data of a window'''
     t1 = time.time()
+    
     
     win_size, step_size, cluster_dis = params["win_size"], params["step_size"], params["cluster_dis"]
     if data_type == "ont":
@@ -147,12 +122,6 @@ def parse_reg_pileup(ctg, reg_start, reg_end, ref, bam, out_dir, params, data_ty
     write_pileup_dic(window_pileup_dict, pileup_out)
     # return ls, window_pileup_dict
 
-def call_back(res):
-    # return
-    print(res)
-def error_call_back(error_code):
-    # return
-    print("error: ", error_code)
 
 def parse_pileup_parallel(ctg_ls, ref, bam_in, threads, params, out_dir, data_type):
     # 

@@ -1,8 +1,9 @@
 import logging
+import os
 
 
 logger = logging.getLogger()
-def _enable_logging(log_file, debug, overwrite):
+def enable_logging(log_file, debug=False, overwrite=True):
     """
     Turns on logging, sets debug levels and assigns a log file
     """
@@ -23,3 +24,8 @@ def _enable_logging(log_file, debug, overwrite):
     logger.setLevel(logging.DEBUG)
     logger.addHandler(console_log)
     logger.addHandler(file_handler)
+
+
+def make_dir(dir):
+    if not os.path.isdir(dir):
+        os.makedirs(dir)

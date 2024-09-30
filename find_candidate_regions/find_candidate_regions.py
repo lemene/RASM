@@ -1,33 +1,15 @@
 import pysam
-import sys
 import os
 import re
 import random
 import signal
 import multiprocessing as mp
-from multiprocessing import Pool
-import argparse
 from collections import namedtuple
 import gzip
 import subprocess
-import pandas as pd
-# from find_reg_by_depth import find_by_dp, find_by_dp2, get_dp_info_parallel, Depth_info      # vscode调
-# from find_from_pileup import parse_pileup_parallel
-from find_candidate_regions.find_reg_by_depth import find_by_dp, find_by_dp2, get_dp_info_parallel, Depth_info    # shell调
-from find_candidate_regions.find_from_pileup import parse_pileup_parallel
+from find_candidate_regions.find_reg_by_depth import find_by_dp
 Region = namedtuple('Region', ["chr_id", "start", "end"])
 chr_info = namedtuple('chr_info', ["chr_id", "chr_len"])
-
-def write_dic(dic, fout):
-    data=pd.DataFrame(dic)
-    data.to_csv(fout, sep="\t", index=False)
-def write_dpinfo_dic(dp_info_dic:dict, fout):
-    data=pd.DataFrame(dp_info_dic)
-    data.to_csv(fout, sep="\t", index=False)
-    # with open(fout, "w") as f:
-    #     f.write("chr_id\tchr_len\tchr_dp\twin_size\tblock_size\tblock_num\tblock_dp_ls\n")
-    #     for dp_info in dp_info_dic.values():
-    #         f.write("{}\t{}\t{}\t{}\t{}\t{}\t{}\n".format(dp_info.chr_id, dp_info.chr_len, dp_info.chr_dp, dp_info.win_size, dp_info.block_size, dp_info.block_num, dp_info.block_dp_ls, ))
 
 
 def cal_sum(arry, l, r):
@@ -92,35 +74,6 @@ def cluster_regions(reg_in):    # for clip regioins   return clustered regions i
             reg_start = reg.start
             reg_end = reg.end
             need_to_cluster = [reg]
-    if reg_start > -1:
-        reg_out.append(Region(ctg, reg_start, reg_end))
-    return reg_out
-
-def cluster_regions2(reg_in):    # lowdep cluster return clustered regions in list type
-    if len(reg_in) < 1:
-        return []
-    ctg = reg_in[0].chr_id
-    reg_start = -1
-    reg_end = -1
-    reg_out = []
-    max_len = 200
-    for reg in reg_in:
-        # if reg[0] == reg_end:   # 区间有连接
-        #     reg_end = reg[1]
-        if reg_start > -1:
-            if reg.start - reg_end <= max_len:
-                reg_end = reg.end
-            else:   # new_reg
-                # if reg_start > -1:   # 非首次
-                #     reg_out.append(Region(ctg, reg_start, reg_end))
-                    # reg_start = reg.start
-                    # reg_end = reg.end
-                reg_out.append(Region(ctg, reg_start, reg_end))
-                reg_start = reg.start
-                reg_end = reg.end
-        else:
-            reg_start = reg.start
-            reg_end = reg.end
     if reg_start > -1:
         reg_out.append(Region(ctg, reg_start, reg_end))
     return reg_out
@@ -285,192 +238,3 @@ def run_find_candidate_parallel(bam_in, ctg_ls, out_dir, dp_file_dir, num_thread
         bed_ls.append(os.path.join(out_dir, ctg+"_cov.bed"))
     bed_out_merge = os.path.join(out_dir, "candidate.bed")
     bed_merge(bed_ls, bed_out_merge)
-
-def run_find_candidate2(bam_in, ctg, out_dir, config, dp_info_dic, data_type):
-    # bam_reader = pysam.AlignmentFile(bam_in, "rb", index_filename=bam_in + ".bai")
-    ## pipe
-    # 
-    bed_out1 = os.path.join(out_dir, "cov", "parts", ctg+"_cov.bed")    # path/chr1_cov.bed
-    dp_params = config["dp_params"]
-    dp_info = dp_info_dic[ctg]
-    try:
-        find_by_dp2(dp_params, dp_info, bed_out1) # dp_ls, dp_win_size, CHR_INFO, MIN_DP, MAX_DP, bed_out
-    except Exception as e:
-        print("find_by_dp2 failed")
-        print(f"Error: {e}")
-    
-    # 
-    clip_params = config["clip_params"]
-    # min_clip_num = clip_params["min_clip_num"]
-    min_clip_portion = clip_params["min_clip_portion"]
-    min_clip_num = min_clip_portion * dp_info.whole_dp
-    min_clip_len = clip_params["min_clip_len"]
-    print("{} min_clip_num:{}, min_clip_len:{}".format(ctg, min_clip_num, min_clip_len))
-    bed_out2 = os.path.join(out_dir, "clip", "parts", ctg+"_clip.bed")   # path/chr1_clip.bed
-    try:
-        find_from_clip(bam_in, ctg, bed_out2, min_clip_num, min_clip_len)
-    except Exception as e:
-        print("find_from_clip failed")
-        print(f"Error: {e}")
-    print("{} find by dp clip Done!!!".format(ctg))
-
-
-def call_back(res):
-    print(res)
-def error_call_back(error_code):
-    print(error_code)
-
-def run_find_candidate2_parallel(ref, bam_in, ctg_ls, out_dir, threads, config, args):
-    
-    print("get_dp_info!!!")
-    dp_win_size = config["dp_params"]["dp_win_size"]
-    block_size = config["dp_params"]["block_size"]
-    min_MQ = config["dp_params"]["min_MQ"] # 20/0/1 may change for bettre
-    ## get dpinfo from mosdepth，include avg_depth
-    dp_info_dic = get_dp_info_parallel(bam_in, threads, out_dir, dp_win_size, block_size, min_MQ)
-    print("get_dp_info done!!!")
-
-    ## 
-    dirs = [os.path.join(out_dir, "clip", "parts"), os.path.join(out_dir,"cov", "parts")]
-    for dir in dirs:
-        if not os.path.exists(dir): os.makedirs(dir)
-    pool = Pool(processes=threads)
-    for ctg in ctg_ls:
-        pool.apply_async(run_find_candidate2, args=(bam_in, ctg, out_dir, config, dp_info_dic, args.data_type), callback=call_back, error_callback=error_call_back) 
-    pool.close() # 关闭进程池，表示不能再往进程池中添加进程，需要在join之前调用
-    pool.join() # 等待进程池中的所有进程执行完毕
-    # for ctg in ctg_ls:
-    #     run_find_candidate2(bam_in, ctg, out_dir, config, dp_info_dic)
-    ## find from pileup
-    data_type = args.data_type
-    if config["apply_pileup"]:
-        print("apply pileup")
-        pileup_dir = os.path.join(out_dir, "pileup")
-        if not os.path.exists(pileup_dir):os.makedirs(pileup_dir)
-        parse_pileup_parallel(ctg_ls, ref, bam_in, threads, config["pileup_params"], pileup_dir, data_type)
-    
-    print("find_candidate done!!!")
-
-
-    ## bed merge
-    merge_cmd1 = ["cat", out_dir + "/clip/parts/*clip.bed", "| sort -k 1,1 -k 2n,2", ">", out_dir + "/clip/candidate_clip.bed"]
-    merge_cmd2 = ["cat", out_dir + "/cov/parts/*cov.bed", "| sort -k 1,1 -k 2n,2", ">", out_dir + "/cov/candidate_cov.bed"]
-    subprocess.check_call(" ".join(merge_cmd1), shell=True)
-    subprocess.check_call(" ".join(merge_cmd2), shell=True)
-
-    merge_cmd = ["cat", out_dir + "/clip/candidate_clip.bed", out_dir + "/cov/candidate_cov.bed", out_dir + "/pileup/candidate_pileup.bed", "| sort -k 1,1 -k 2n,2", ">", out_dir + "/candidate.bed"]
-    subprocess.check_call(" ".join(merge_cmd), shell=True)
-
-    print("---------merge bed done-------")
-    '''bed_ls = []
-    if config["apply_pileup"]:
-        bed_ls.append(os.path.join(pileup_dir, "candidate_pileup.bed"))
-    for ctg in ctg_ls:
-        bed_ls.append(os.path.join(out_dir, "clip", ctg+"_clip.bed"))
-        bed_ls.append(os.path.join(out_dir, "cov", ctg+"_cov.bed"))
-    bed_out_merge = os.path.join(out_dir, "candidate.bed")
-    # bed_merge(bed_ls, bed_out_merge)
-    merge_cmd = ["cat", " ".join(bed_ls), "| sort -k 1,1 -k 2n,2", ">", bed_out_merge]
-    subprocess.check_call(" ".join(merge_cmd), shell=True)'''
-
-    ## 
-    
-
-
-def main():
-    ## Debug
-    # bam_in = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/Test/tests/chm13_hifi_ctgs/NC_19/my_pipe/step1_mapping/aln.sorted.bam"
-    # ctg_ls = ["NC_000019.10"]
-    # out_dir = "/public/home/hpc214712170/shixf/new_code/assembly/Test_code/resolve_err/Pipe/find_candidate_regions/test_find"
-    # dp_file_dir = "/public/home/hpc214712170/Test/tests/chm13_hifi_ctgs/NC_19/my_pipe/depths"
-    # num_threads = 1
-    # MIN_CLIP_NUM = 5
-    # MIN_CLIP_LEN = 1000
-    # DP_WIN_SIZE = 100
-    # MIN_DEP = 10
-    # MAXDEP = 48
-    # MIN_DEP_REG = 100
-    # run_find_candidate_parallel(bam_in, ctg_ls, out_dir, dp_file_dir, num_threads, MIN_CLIP_NUM, MIN_CLIP_LEN, DP_WIN_SIZE, MIN_DEP, MAXDEP, MIN_DEP_REG)
-    return
-    # ##
-    # bam_in = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/resolve_region/solve_del/test/NC_060930.1_hap1.sort.bam"
-    # bam_index = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/resolve_region/solve_del/test/NC_060930.1_hap1.sort.bam.bai"
-    # # bam_in = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/resolve_region/solve_del/test/filter/filtered.bam"
-    # # bam_index = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/resolve_region/solve_del/test/filter/filtered.bam.bai"
-    # ctg_ls = ["NC_060930.1"]
-    # bed_out1 = "/public/home/hpc214712170/shixf/new_code/assembly/Test_code/resolve_err/Pipe/find_candidate_regions/test_find/find_from_clip.bed"
-
-    # find_from_clip(bam_in, bam_index, ctg_ls, bed_out1)
-
-    # ## 
-    # fai = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/T2T_CHM13/GCF_009914755.1_T2T-CHM13v2.0_genomic.fna.fai"
-    # # depth = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/resolve_region/solve_del/test/find_from_filter/depths/NC_060930.1_hap1.depth"
-    # # depth = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/resolve_region/solve_del/test/find_from_filter/depths2/NC_060930.1_hap1.depth"
-    # depth = "/public/home/hpc214712170/shixf/projects/ref-guided-assembly/resolve_region/solve_del/test/test_depths/depths/NC_060930.1_hap1.depth"
-    # ctg_ls = ["NC_060930.1"]
-    # bed_out2 = "/public/home/hpc214712170/shixf/new_code/assembly/Test_code/resolve_err/Pipe/find_candidate_regions/test_find/find_from_cov.bed"
-
-    # find_by_cov(bam_in, bam_index, ctg_ls, bed_out2)
-
-
-    # ## region_candidate
-    # bed_out_merge = "/public/home/hpc214712170/shixf/new_code/assembly/Test_code/find_err/find_candidate_regions/find_candidate.bed"
-    # bed_merge([bed_out1, bed_out2], bed_out_merge)
-
-
-    ### ,MIN_CLIP_NUM, MIN_DEP, MIN_DEP_REG
-    parser = argparse.ArgumentParser(description="get_candidate_regions")
-    parser.add_argument("-t", "--threads", dest="threads", type=int, default=1)
-    parser.add_argument("--ctg-ls", dest="ctg_ls", required=True, help="ctg list, format like:chr1,chr2")
-    # parser.add_argument
-    parser.add_argument("--bam", dest="bam_in", required=True, help="bam file")
-    parser.add_argument("--out-dir", dest="out_dir", required=True, help="out dir of candidate regions")
-    parser.add_argument("--min_clip_num", dest="min_clip_num", default=5, help="min_clip_num of window to be selected") # important
-    parser.add_argument("--min_clip_len", dest="min_clip_len", default=1000, help="min_clip_len of clip to be selected as clip")
-    parser.add_argument("--min-dep", dest="min_dep", default=3, help="dep threshold to be select as low dep region")
-    parser.add_argument("--min-dep-reg", dest="min_dep_reg", default=100, help="minimum length of low dep region")
-    parser.add_argument("-a", dest="all_chrs", action='store_true')
-    args = parser.parse_args()
-    if not os.path.exists(args.bam_in + ".bai"):
-        print("BAM index is not available!!!")
-        pysam.index("-@", str(args.threads), args.bam_in)
-    if args.all_chrs:
-        ctg_ls = list(pysam.AlignmentFile(args.bam_in, "rb").references)
-    else:
-        ctg_ls = args.ctg_ls.strip().split(",")        # 解析contig ls
-    run_find_candidate_parallel(args.bam_in, ctg_ls, args.out_dir, int(args.threads), int(args.min_clip_num), int(args.min_clip_len), int(args.min_dep), int(args.min_dep_reg))
-    
-    # bed_ls = []
-    # for ctg in ctg_ls:
-    #     bed_ls.append(os.path.join(args.out_dir, ctg+"_clip.bed"))
-    #     bed_ls.append(os.path.join(args.out_dir, ctg+"_cov.bed"))
-    # bed_out_merge = os.path.join(args.out_dir, "candidate.bed")
-    # bed_merge(bed_ls, bed_out_merge)
-
-    # bam_in = sys.argv[1]
-    # bam_index = sys.argv[2]
-    # out_dir = sys.argv[3]
-    # ctg_ls = sys.argv[4].strip().split(",")        # 解析contig ls
-    # num_threads = int(sys.argv[5])
-    ## single pipe
-    # run_find_candidate(bam_in, bam_index, ctg_ls, out_dir)
-    ## parallel
-    # run_find_candidate_parallel(bam_in, bam_index, ctg_ls, out_dir, num_threads)
-
-    ### merge bed
-    # bed_ls = []
-    # for ctg in ctg_ls:
-    #     bed_ls.append(os.path.join(out_dir, ctg+"_clip.bed"))
-    #     bed_ls.append(os.path.join(out_dir, ctg+"_cov.bed"))
-    # bed_out_merge = os.path.join(out_dir, "candidate.bed")
-    # bed_merge(bed_ls, bed_out_merge)
-    print("------------------------merge candidate bed Done--------------------------")
-
-if __name__ == "__main__":
-    out_dir = "/public/home/hpc214712170/Test/tests/melanogaster_ont/flye/my_pipe/step2_candidate_regions"
-    merge_cmd1 = ["cat", out_dir + "/clip/parts/*clip.bed", "| sort -k 1,1 -k 2n,2", ">", out_dir + "/clip/candidate_clip.bed"]
-    merge_cmd2 = ["cat", out_dir + "/clip/parts/*cov.bed", "| sort -k 1,1 -k 2n,2", ">", out_dir + "/cov/candidate_cov.bed"]
-    merge_cmd = ["cat", out_dir + "/clip/candidate_clip.bed", out_dir + "/cov/candidate_cov.bed", out_dir + "/clip/candidate_pileup.bed", "| sort -k 1,1 -k 2n,2", ">", out_dir + "/candidate.bed"]
-    print(" ".join(merge_cmd1))
-    print(" ".join(merge_cmd2))
-    

@@ -3,8 +3,6 @@ import argparse
 import os, sys
 import traceback
 import pysam
-import yaml
-from create_consensus_by_bed import fasta_parser, scaffold_by_rec, Utils
 import info_stats
 import detector as dt
 
@@ -21,7 +19,6 @@ def main():
     parser.add_argument("--bam", dest="bam", required=True)
     parser.add_argument("--log", default="lrmd.log")
     
-    ## 
     parser.add_argument("--min-contig", dest="min_contig", help="skip SV consensus process contig shorter than this, keep with raw", default=20000, type=int)   # 200000 调 1,000,000     5,000,000
     
     parser.add_argument("--config", type=str)
@@ -30,35 +27,23 @@ def main():
         
         args = parser.parse_args()
         
-        detector = dt.Detector()
+        detector = dt.Detector(args.config, args.work_dir)
 
+        utils.enable_logging(os.path.join(args.work_dir, "lrmd.log"))
         utils.logger.info("Start my pipe to assembly")
-        ### 绝对路径配置
+
         args.work_dir = os.path.abspath(args.work_dir)
 
-        ### 生成文件路径配置
-        work_dir = args.work_dir
-        step2_dir = work_dir + "/" + "step2_candidate_regions"
-        log_dir = work_dir + "/" + "logs"
-        config_dir = work_dir + "/" + "config"
-        for Dir in [work_dir, step2_dir, log_dir, config_dir]:
-            Utils.make_dir(Dir)
-        assembly_log = os.path.join(log_dir, "assembly.log")
-        utils._enable_logging(assembly_log, debug=False, overwrite=True)
+        utils.make_dir(args.work_dir)
+        utils.make_dir(os.path.join(args.work_dir, "step2_candidate_regions"))
 
         args.bam = os.path.abspath(args.bam)
         args.ref = os.path.abspath(args.ref)
 
-        ## 一些参数的获取
-        config = yaml.safe_load(open(args.config))
-        utils.logger.info("Config参数设置: {}".format(config))
-
         bam = pysam.AlignmentFile(args.bam, "rb")
         ctgs = [(ref, rlen) for ref, rlen in zip(bam.references, bam.lengths) if rlen >= args.min_contig]
 
-        detector.run_find_pipe(args.ref, args.bam, ctgs, step2_dir, args.threads, config["step2"])
-
-        info_stats.get_qv(step2_dir, ctgs, args.threads)
+        detector.run_find_pipe(args.ref, args.bam, ctgs, os.path.join(args.work_dir, "step2_candidate_regions"), args.threads)
 
     except:
         traceback.print_exc()
