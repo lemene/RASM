@@ -285,10 +285,6 @@ def filter2(bam, ctg, reg_start, reg_end, ctg_len, clu_ls, out_dir, config):
         if not flag:    # no mis
             out_ls.append([reg, "No_mis"])
    
-    print("--------------------------------------------xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
-    print("--------------------------------------------xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
-    print("--------------------------------------------xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
-    print("--------------------------------------------xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
     print(filtered_bed)
     print("filtered_ls:", filtered_ls)
     with open(filtered_bed, "w") as f:
@@ -302,6 +298,7 @@ def find_candidate(ctg, reg_start, reg_end, ref, bam, out_dir, dp_info:Depth_inf
     bam_reader = pysam.AlignmentFile(bam, "rb", index_filename=bam + ".bai")
     ctg_len = bam_reader.get_reference_length(ctg)
     print("Find mis for:{}:{}-{}".format(ctg, reg_start, reg_end))
+
     # OUT: 
     # 
     reg_len = reg_end - reg_start
@@ -317,7 +314,6 @@ def find_candidate(ctg, reg_start, reg_end, ref, bam, out_dir, dp_info:Depth_inf
     dp_ls = dp_info.dp_ls
     dp_win_size = dp_info.win_size
     
-    # print("block_batch:", block_batch, "block_size:", block_size, 'block_num:', block_num)
     # clip params
     clip_params = config["clip_params"]
     min_clip_portion = clip_params["min_clip_portion"]
@@ -413,6 +409,7 @@ def find_candidate(ctg, reg_start, reg_end, ref, bam, out_dir, dp_info:Depth_inf
     win_clip_num = [0] * win_num    # clip num of a window
     for i in range(win_num):    # i*stride, i*stride+win_size -> reg_start+i*stride, reg_start+i*stride+win_size
         win_clip_num[i] = cal_sum(clip_ls, reg_start+i*stride, reg_start+i*stride+win_size) if reg_start+i*stride+win_size < reg_len else cal_sum(clip_ls, reg_start+i*stride, reg_len)
+    
     # 3、get dp info, skipped
     print("Get dp info")
     win_dp_ls = [0] * win_num
@@ -458,9 +455,7 @@ def find_candidate(ctg, reg_start, reg_end, ref, bam, out_dir, dp_info:Depth_inf
         win_end = reg_start + i * stride + win_size if reg_start + i * stride + win_size <= reg_end else reg_end
         # print(win_start, "-", win_end)
         f1.write("{}\t{}\t{}\t{:.2f}\t{}\t{:.4f}\t{:.4f}\t{:.4f}\n".format(ctg, win_start, win_end, win_dp_ls[i], win_clip_num[i], win_correct_portion[i], win_differ_portion[i], win_disagree_portion[i]))
-        # if win_dp_ls[i] == 0: 
-        #     print(win_correct_portion[i] <= min_correct_portion)
-        #     print(win_correct_portion[i])
+ 
         '''筛选条件：dp、clip、pileup
         消融实验：
         '''
@@ -487,55 +482,5 @@ def find_candidate(ctg, reg_start, reg_end, ref, bam, out_dir, dp_info:Depth_inf
     clu_ls = cluster_by_dis(candidate_ls, 5000)
     print("len(clu_ls)", len(clu_ls))
     
-    ##
-    print("clu_ls:", clu_ls)
-    clu1_bed = os.path.join(candidate_dir, reg_id + ".clu1.bed")
-    f3 = open(clu1_bed, "w")
-    # boundary = 10000
-    for reg in clu_ls:
-        chr, start, end = reg
-        start_idx = start // stride
-        end_idx = (end - win_size) // stride if end < reg_end else win_num - 1
-        # print(start_idx, end_idx)
-        ls1 = [round(win_dp_ls[i], 4) for i in range(start_idx, end_idx + 1)]
-        ls2 = [round(win_clip_num[i], 4) for i in range(start_idx, end_idx + 1)]
-        # 
-        ls3 = [round(win_correct_portion[i], 4) for i in range(start_idx, end_idx + 1)]
-        ls4 = [round(win_differ_portion[i], 4) for i in range(start_idx, end_idx + 1)]
-        ls5 = [round(win_disagree_portion[i], 4) for i in range(start_idx, end_idx + 1)]
-        f3.write("{}\t{}\t{}\t{}\t{}\n".format(chr, start, end, ls1, ls2))
-
     ### -----------------------三、Filter-----------------------
     filter2(bam, ctg, reg_start, reg_end, ctg_len, clu_ls, out_dir, config)
-
-
-def run_find_pipe(ref, bam, ctgs, out_dir, threads, config):
-
-    bam_reader = pysam.AlignmentFile(bam, "rb")
-
-    dp_win_size = config["dp_params"]["dp_win_size"]
-    block_size = config["dp_params"]["block_size"]
-    min_MQ = config['dp_params']['min_MQ']
-    dp_info_dic = get_dp_info_parallel(bam, threads, out_dir, dp_win_size, block_size, min_MQ)
-
-    ## ----------------1、find candidate----------------
-    # dirs
-    candidate_dir = os.path.join(out_dir, "candidate")
-    if not os.path.isdir(candidate_dir):os.mkdir(candidate_dir)
-    info_bed_dir = os.path.join(out_dir, "info")
-    if not os.path.isdir(info_bed_dir):os.mkdir(info_bed_dir)
-    filtered_dir = os.path.join(out_dir, "filtered")
-    # if not os.path.isdir(filtered_dir):os.mkdir(filtered_dir)
-    filtered2_dir = os.path.join(out_dir, "filtered2")
-    if not os.path.isdir(filtered2_dir):os.mkdir(filtered2_dir)
-    pileup_dir = os.path.join(out_dir, "pileup")
-    if not os.path.isdir(pileup_dir):os.mkdir(pileup_dir)
-
-    # run find
-    pool = Pool(processes=threads)
-    for ctg in ctgs:
-        pool.apply_async(find_candidate, args=(ctg[0], 0, ctg[1], ref, bam, out_dir, dp_info_dic[ctg[0]], config))
-    
-    pool.close() 
-    pool.join()
-

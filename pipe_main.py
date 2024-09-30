@@ -5,8 +5,8 @@ import traceback
 import pysam
 import yaml
 from create_consensus_by_bed import fasta_parser, scaffold_by_rec, Utils
-from find_candidate_regions.find_mis_pipe import run_find_pipe
 import info_stats
+import detector as dt
 
 import utils
 
@@ -24,12 +24,14 @@ def main():
     ## 
     parser.add_argument("--min-contig", dest="min_contig", help="skip SV consensus process contig shorter than this, keep with raw", default=20000, type=int)   # 200000 调 1,000,000     5,000,000
     
-    parser.add_argument("--config", default='/public/home/hpc214712170/shixf/new_code/assembly/Test_code/resolve_err/Pipe/Configs/Config.yaml')
+    parser.add_argument("--config", type=str)
 
     try:
         
         args = parser.parse_args()
         
+        detector = dt.Detector()
+
         utils.logger.info("Start my pipe to assembly")
         ### 绝对路径配置
         args.work_dir = os.path.abspath(args.work_dir)
@@ -54,7 +56,7 @@ def main():
         bam = pysam.AlignmentFile(args.bam, "rb")
         ctgs = [(ref, rlen) for ref, rlen in zip(bam.references, bam.lengths) if rlen >= args.min_contig]
 
-        run_find_pipe(args.ref, args.bam, ctgs, step2_dir, args.threads, config["step2"])
+        detector.run_find_pipe(args.ref, args.bam, ctgs, step2_dir, args.threads, config["step2"])
 
         info_stats.get_qv(step2_dir, ctgs, args.threads)
 
