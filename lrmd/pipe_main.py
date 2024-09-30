@@ -3,7 +3,6 @@ import argparse
 import os, sys
 import traceback
 import pysam
-import info_stats
 import detector as dt
 
 import utils

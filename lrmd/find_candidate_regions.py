@@ -7,7 +7,7 @@ import multiprocessing as mp
 from collections import namedtuple
 import gzip
 import subprocess
-from find_candidate_regions.find_reg_by_depth import find_by_dp
+from find_reg_by_depth import find_by_dp
 Region = namedtuple('Region', ["chr_id", "start", "end"])
 chr_info = namedtuple('chr_info', ["chr_id", "chr_len"])
 
