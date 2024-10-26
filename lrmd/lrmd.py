@@ -5,6 +5,14 @@ import argparse
 import traceback
 import pysam
 
+import pysam
+import detector as dt
+import numpy as np
+import multiprocessing as mp
+import summary
+
+import utils
+
 def n50(fname, gsize=0):
     bam = pysam.AlignmentFile(fname, "rb")
     lens = []
@@ -31,53 +39,44 @@ def coverage(fname):
                 cov[rd.reference_start] += 1
                 cov[rd.reference_end] -= 1
     
-def qv(fname):
-    infos = []
-    for line in open(fname):
-        its = line.split()
-        depth = int(its[3])
-        match = its[4].count('.') + its[4].count(',')
 
-        infos.append([depth, match, len(its[4])-depth])
-
-    infos.sort(key=lambda x: x[0])
-    vinfos = infos[len(infos) // 10 : 9*len(infos) // 10]
-    
-    cor = 0
-    rd_err = [0, 0]
-    for d, m, e in vinfos:
-        if m*2 > d:
-            cor += 1
-            rd_err[0] += d
-            rd_err[1] += d - m + e
-        
-    print(cor / len(vinfos))
-    print(rd_err[1] / rd_err[0])
-            
-            
 
 
 def test(fname):
     bam = pysam.AlignmentFile(fname, "rb")
-    print(bam.get_reference_length("ctg0"))
+    #  CP132235.1:1226600-1227600
+    for read in bam.fetch("CP132235.1", 1226600, 1227600):
+        print(read.qname, read.mapping_quality, read.is_unmapped, read.is_secondary, read.is_supplementary)
+    # return read.is_unmapped or read.is_secondary or read.is_supplementary or read.mapping_quality < mapq
 
 
 
 def main(argv):
-    parser = argparse.ArgumentParser(description="")
-    
+    parser = argparse.ArgumentParser(description="detect misassembly")
     parser.add_argument("command", type=str)
-    parser.add_argument("bam", type=str)
-    parser.add_argument("--test", type=str)
+    parser.add_argument("--config", type=str)
+    parser.add_argument("--bam", type=str)
+    parser.add_argument("--asm", type=str)
+    parser.add_argument("-t", "--threads", type=int, default=1)
+    parser.add_argument("--work-dir", default="output", help="work directory to output results")
+    parser.add_argument("--min-contig", default=20000, type=int)  
+    parser.add_argument("--dump", type=str, help="file for storing intermediate state" )
+
     try:
-    
         args = parser.parse_args(argv)
-        if args.command == "n50":
+
+        if args.command == "detect":
+            detector = dt.Detector(args.config, args.work_dir, args.bam, args.asm)
+            detector.detect(args.threads, args.min_contig)
+        elif args.command == "n50":
             print(n50(args.bam))
         elif args.command == "coverage":
             coverage(args.bam)
-        elif args.command == "qv":
-            qv(args.test)
+        elif args.command == "summary":
+            smry = summary.Summary(args.bam, args.asm)
+            smry.scan(args.threads, args.min_contig)
+            smry.stat(args.threads)
+
         elif args.command == "test":
             test(args.bam)
 
@@ -85,7 +84,6 @@ def main(argv):
         traceback.print_exc()
         print("----------------")
         print(parser.usage)
-
 
 
 if __name__ == "__main__":
