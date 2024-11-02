@@ -1,10 +1,11 @@
 import logging
 import os
 import subprocess
+import gzip
 
 
 logger = logging.getLogger()
-def enable_logging(log_file, debug=False, overwrite=True):
+def enable_logging(log_file="", debug=False, overwrite=True):
     """
     Turns on logging, sets debug levels and assigns a log file
     """
@@ -16,16 +17,16 @@ def enable_logging(log_file, debug=False, overwrite=True):
     console_log.setFormatter(console_formatter)
     if not debug:
         console_log.setLevel(logging.INFO)
-
-    if overwrite:
-        open(log_file, "w").close()
-    file_handler = logging.FileHandler(log_file, mode="a")
-    file_handler.setFormatter(log_formatter)
+    logger.addHandler(console_log)
+    
+    if log_file:
+        file_handler = logging.FileHandler(log_file, mode=("a" if  not overwrite else "w"))
+        file_handler.setFormatter(log_formatter)
+        logger.addHandler(file_handler)
 
     logger.setLevel(logging.DEBUG)
-    logger.addHandler(console_log)
-    logger.addHandler(file_handler)
 
+enable_logging("")
 
 def safe_make_dir(dir):
     if not os.path.isdir(dir):
@@ -48,6 +49,15 @@ def run_mosdepth(bam:str, prefix:str, win_size:int, mapq:int, threads:int=4, ctg
 def run_samtools_mpileup(bam, output, ctg, ref, mapq):
     cmd = "samtools mpileup -B -q %d -aa -r %s -f %s %s -o %s" % (mapq, ctg, ref, bam, output)
     run_command(cmd)
+
+def split_contig_by_block(ctgs, bsize=5000000):
+    for ctg_name, ctg_len in ctgs:
+        s = 0
+        while s < ctg_len:
+            e = min(s+bsize, ctg_len)
+            yield ctg_name, ctg_len, s, e
+            s = e
+    return
 
 class WinIterator(object):
     def __init__(self, length, win_size, stride):
@@ -72,3 +82,9 @@ class WinIterator(object):
         else:
             raise StopIteration
         
+
+def open_file(fname, mode):
+    if fname.endswith(".gz"):
+        return gzip.open(fname, mode) 
+    else:
+        return open(fname, mode)

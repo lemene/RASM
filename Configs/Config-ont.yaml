@@ -16,7 +16,7 @@
     min_clip_portion: 0.35  # 0.25
     clip_win_size: 1000 #
     min_MQ: 0  # keep with dp
-  apply_pileup: false
+  apply_pileup: true
   pileup_params:
     min_correct_portion: 0.9    # 一致性比例（类似identity）hifi:0.95, ont:0.9
     max_differ_portion: 0.2     # 插入删除的不一致比例  hifi:0.15, ont:0.2

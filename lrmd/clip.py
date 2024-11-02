@@ -2,6 +2,8 @@ import pysam
 from functools import partial
 import multiprocessing as mp
 
+import numpy as np
+
 import utils
 from feature import *
 
@@ -9,38 +11,47 @@ class ClipInfo(Feature):
     def __init__(self):
           self.clips = {}
 
-    def build(self, ctgs, bam_fname, threads, min_mapq, min_clip_len):
+    def build(self, ctgs, bam_fname:str, threads:int, min_clip_len:int):
         
         results = []
         pool = mp.Pool(processes=threads)
-        for ctg_name, ctg_len in ctgs:
-            results.append(pool.apply_async(partial(self._build_one_contig), args=(ctg_name, bam_fname, min_mapq, min_clip_len)))
+        for binfo in utils.split_contig_by_block(ctgs):
+            results.append(pool.apply_async(ClipInfo.collect_clip_in_block, args=(binfo, bam_fname, min_clip_len)))
         pool.close() 
         pool.join()
 
+        for ctg_name, ctg_len in ctgs:
+            self.clips[ctg_name] = np.zeros(ctg_len)
+
         for r in results:
-            ctg_name, clip = r.get()
-            self.clips[ctg_name] = clip
+            (ctg_name, ctg_len, start, end), clip = r.get()
+            self.clips[ctg_name][start:end] = clip
 
 
-    def _build_one_contig(self, ctg_name, bam_fname, min_mapq, min_clip_len):
+    @staticmethod
+    def collect_clip_in_block(binfo, bam_fname, min_clip_len):
+        ctg_name, ctg_len, start, end = binfo
+        
         bam = pysam.AlignmentFile(bam_fname, "rb")
 
-        ctg_len = bam.get_reference_length(ctg_name)
-        clips = [0] * ctg_len
-        for read in bam.fetch(ctg_name):
-            if read.is_unmapped or read.is_secondary or read.mapping_quality < min_mapq:
+        clips =  np.zeros(end - start)
+        for read in bam.fetch(ctg_name, start, end):
+            if read.is_unmapped or read.is_secondary or read.mapping_quality < 1:
                 continue
 
             left = read.cigartuples[0]
-            if (left[0] == 4 or left[0] == 5)  and left[1] >= min_clip_len:
-                    clips[read.reference_start] += 1
+            if (left[0] == 4 or left[0] == 5)  and left[1] >= min_clip_len and \
+                read.reference_start >= start and read.reference_start < end:
+                
+                clips[read.reference_start - start] += 1
 
             right = read.cigartuples[-1]
-            if (right[0] == 4 or right[0] == 5) and right[1] >= min_clip_len:
-                    clips[read.reference_end-1] += 1
+            if (right[0] == 4 or right[0] == 5) and right[1] >= min_clip_len and \
+                read.reference_end-1 >= start and read.reference_end-1 < end:
 
-        return ctg_name, clips
+                clips[read.reference_end-1 - start] += 1
+
+        return binfo, clips
          
 
     def get_mis_candidates(self, win_size, stride, min_clip_num):
@@ -58,7 +69,7 @@ class ClipInfo(Feature):
 
     def compress(self, clips, win_size, stride):
         win_iter = utils.WinIterator(len(clips), win_size, stride)
-        compressed = [0] * win_iter.size()
+        compressed = np.zeros(win_iter.size())
 
         for i, (s, e) in enumerate(win_iter):
             compressed[i] = sum(clips[s:e])

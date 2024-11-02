@@ -4,54 +4,48 @@ from functools import partial
 import multiprocessing as mp
 
 import utils
+import numpy as np
 
 from collections import Counter
 
 class PileupInfo(object):
     
-    def __init__(self, wrkdir):
-        self.wrkdir = wrkdir
-        self.pileups = {}
+    def __init__(self):
+        self.pileups = {} # depth, 
 
     def _get_pileup_fname(self, ctg):
         return os.path.join(self.wrkdir, "%s_pileup.txt" % ctg)
     
-    def build(self, ctgs, bam_fname, asm_fname, threads, min_mapq):
+    def build(self, ctgs, smry, threads):
 
         results = []
         pool = mp.Pool(processes=threads)
-        for ctg_name, ctg_len in ctgs:
-            results.append(pool.apply_async(partial(self._build_one_contig), args=(ctg_name, bam_fname, asm_fname, min_mapq)))
+        for binfo in utils.split_contig_by_block(ctgs):
+            (ctg_name, ctg_len, start, end) = binfo
+            
+            results.append(pool.apply_async(PileupInfo.collect_pileup_in_block, 
+                                            args=(binfo, smry.infos[ctg_name][0][:,start:end])))
         pool.close() 
         pool.join()
 
+        
+        for ctg_name, ctg_len in ctgs:
+            self.pileups[ctg_name] = np.zeros((ctg_len,3))
+
         for r in results:
-            ctg_name, pileup = r.get()
-            self.pileups[ctg_name] = pileup
+            (ctg_name, ctg_len, start, end), pileup = r.get()
+            self.pileups[ctg_name][start:end,:] = pileup
 
+    @staticmethod
+    def collect_pileup_in_block(binfo, block):
+        (ctg_name, ctg_len, start, end) = binfo
+        infos = np.zeros((end-start, 3))
 
-    def _build_one_contig(self, ctg_name, bam_fname, asm_fname, mapq):
-        pileup_fname = self._get_pileup_fname(ctg_name)
-        #utils.run_samtools_mpileup(bam_fname, pileup_fname, ctg_name, asm_fname, mapq)
+        for i, t in enumerate(block.T):
+            infos[i,0] = sum(t[0:5]) + t[5] + t[7]
+            infos[i,1] = t[0]
 
-        return ctg_name, self.load_pileup(pileup_fname)
-
-
-    def load_pileup(self, fname):
-        infos = []
-        for line in open(fname):
-            its = line.split()
-            assert len(its) == 6
-
-            depth = int(its[3])
-            detail = its[4]
-            counter = Counter(detail)
-            match = counter['.'] + counter[',']
-            diff = counter['A'] + counter['C']+counter['G'] + counter['T'] + \
-                   counter['a'] + counter['c']+counter['g'] + counter['t']
-
-            infos.append((depth, match, diff))
-        return infos
+        return binfo, infos
     
     def get_mis_candidates(self, win_size, stride, max_diff_ratio):
         candidates = []
@@ -59,8 +53,10 @@ class PileupInfo(object):
             compressed = self.compress(pileup, win_size, stride)
 
             for c, (s, e) in zip(compressed, utils.WinIterator(len(pileup), win_size, stride)):
-                 if c > max_diff_ratio:
+                 if 1-c > max_diff_ratio:
+                      print(c, max_diff_ratio)
                       candidates.append((ctg_name, s, e))
+                      assert 0
                       
 
         for ctg_name, start, end in candidates:
@@ -75,7 +71,7 @@ class PileupInfo(object):
             a, b = 0, 0
             for ii in range(s, e):
                 a += pileup[ii][0]
-                b += pileup[ii][2]
+                b += pileup[ii][1]
             
             compressed[i] = b / a if a > 0 else 1
 

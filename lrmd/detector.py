@@ -18,6 +18,7 @@ from collections import namedtuple,defaultdict, Counter
 from depth import *
 from pileup import *
 from clip import *
+from summary import *
 
 import utils
 
@@ -82,10 +83,11 @@ class Detector:
         self.infos = {}
         
         utils.safe_make_dir(wrkdir)
-        utils.enable_logging(os.path.join(self.wrkdir, "lrmd.log"))
         utils.logger.info("Start detecting misassemblies")
 
         utils.logger.info("Config参数设置: {}".format(self.cfg))
+
+        self.summary = Summary(bam_fname, asm_fname)
         
         
     def get_contigs(self, min_contig):
@@ -97,8 +99,10 @@ class Detector:
     
     def detect(self, threads, min_contig):
 
+        self.summary.load("example.pkl")
+
         bam = pysam.AlignmentFile(self.bam_fname, "rb")
-        ctgs = [(ref, rlen) for ref, rlen in zip(bam.references, bam.lengths) if rlen >= min_contig and ref == "CP132235.1"]
+        ctgs = [(ref, rlen) for ref, rlen in zip(bam.references, bam.lengths) if rlen >= min_contig]
 
         candidates = []
 
@@ -112,21 +116,21 @@ class Detector:
         max_diff_ratio = self.cfg["max_diff_ratio"]
         
         if self.cfg['apply_depth']:
-            depth_info = DepthInfo(self.wrkdir)
-            depth_info.build(ctgs, self.bam_fname, threads)
+            depth_info = DepthInfo()
+            depth_info.build(ctgs, self.summary, threads)
             candidates.extend(depth_info.get_mis_candidates( win_size, stride, depth_min_ratio, depth_max_ratio))
             utils.logger.info("+ depth feature: %d" % len(candidates))
 
             
         if self.cfg["apply_clip"]:
             clip_info = ClipInfo()
-            clip_info.build(ctgs, self.bam_fname, threads, min_mapq, min_clip_len)
+            clip_info.build(ctgs, self.bam_fname, threads, min_clip_len)
             candidates.extend(clip_info.get_mis_candidates(win_size, stride, min_clip_num))
             utils.logger.info("+ clip feature: %d" % len(candidates))
 
         if self.cfg["apply_pileup"]:
-            pileup_info = PileupInfo(self.wrkdir)
-            pileup_info.build(ctgs, self.bam_fname, self.asm_fname, threads, min_mapq)
+            pileup_info = PileupInfo()
+            pileup_info.build(ctgs, self.summary, threads)
             candidates.extend(pileup_info.get_mis_candidates(win_size, stride, max_diff_ratio))
             utils.logger.info("+ pileup feature: %d" % len(candidates))
 
@@ -281,12 +285,9 @@ class Detector:
         span = []
         ctg_len = bam.get_reference_length(ctg)
         for read in bam.fetch(ctg, start, end):
-            utils.logger.info("ccc %s %d %d %d %d" % (read.qname, read.mapping_quality, read.is_unmapped, read.is_secondary, read.is_supplementary))
             if (self.is_read_trivial(read, min_mapq)):
                 continue
 
-            utils.logger.info("cigar %s %d %d %d %d" % (read.qname, read.cigartuples[0][0], read.cigartuples[0][1], 
-                                                        read.cigartuples[-1][0], read.cigartuples[-1][1]))
             cigar = read.cigartuples
             left = read.cigartuples[0]
             if left[0] == 4 or left[0] == 5:
@@ -297,13 +298,10 @@ class Detector:
                 if min(right[1], ctg_len - read.reference_end) > min_clip_len:
                     continue
             
-            utils.logger.info("distance: %s %f, %d", read.qname, self.calc_distance(start, end, read, ref), min_clip_len)
             if self.calc_distance(start, end, read, ref) < 0.2:
                 
                 if read.reference_start <= max(0, start - 500) and read.reference_end >= min(ctg_len, end + 500):
                     span.append(read)
-                    utils.logger.info("span: %d", len(span))
-
         
         return len(span) >= 3
     

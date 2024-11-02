@@ -58,7 +58,7 @@ def main(argv):
     parser.add_argument("--bam", type=str)
     parser.add_argument("--asm", type=str)
     parser.add_argument("-t", "--threads", type=int, default=1)
-    parser.add_argument("--work-dir", default="output", help="work directory to output results")
+    parser.add_argument("--work-dir", default=".", help="work directory to output results")
     parser.add_argument("--min-contig", default=20000, type=int)  
     parser.add_argument("--dump", type=str, help="file for storing intermediate state" )
 
@@ -75,10 +75,29 @@ def main(argv):
         elif args.command == "summary":
             smry = summary.Summary(args.bam, args.asm)
             smry.scan(args.threads, args.min_contig)
-            smry.stat(args.threads)
+            smry.save("example.pkl")
+            #smry.load("example.pkl") 
+            #smry.stat(args.threads)
+            #smry.stat_read()
 
         elif args.command == "test":
-            test(args.bam)
+            import clip, pileup, depth
+            smry = summary.Summary(args.bam, args.asm)
+            smry.load("example.pkl") 
+            
+            bam = pysam.AlignmentFile(args.bam, "rb")
+            ctgs = [(ref, rlen) for ref, rlen in zip(bam.references, bam.lengths) if rlen > args.min_contig]
+            #info = clip.ClipInfo()
+            #info.build(ctgs, args.bam, args.threads, 500)
+            #info.get_mis_candidates(400, 200, 5)
+            
+            # info = pileup.PileupInfo()
+            # info.build(ctgs, smry, args.threads, )
+            # info.get_mis_candidates(400, 200, 0.2)
+
+            info = depth.DepthInfo()
+            info.build(ctgs, smry, args.threads )
+            info.get_mis_candidates(400, 200, 0.15, 1.75)
 
     except:
         traceback.print_exc()
