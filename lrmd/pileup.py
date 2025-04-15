@@ -11,7 +11,7 @@ from collections import Counter
 class PileupInfo(object):
     
     def __init__(self):
-        self.pileups = {} # depth, 
+        self.pileups = {} 
 
     def _get_pileup_fname(self, ctg):
         return os.path.join(self.wrkdir, "%s_pileup.txt" % ctg)
@@ -34,6 +34,7 @@ class PileupInfo(object):
 
         for r in results:
             (ctg_name, ctg_len, start, end), pileup = r.get()
+            print("pileup: ", start, end, pileup)
             self.pileups[ctg_name][start:end,:] = pileup
 
     @staticmethod
@@ -53,11 +54,10 @@ class PileupInfo(object):
             compressed = self.compress(pileup, win_size, stride)
 
             for c, (s, e) in zip(compressed, utils.WinIterator(len(pileup), win_size, stride)):
-                 if 1-c > max_diff_ratio:
-                      print(c, max_diff_ratio)
-                      candidates.append((ctg_name, s, e))
-                      assert 0
-                      
+                 
+                print("check", s, e, c, max_diff_ratio)
+                if 1-c > max_diff_ratio:
+                    candidates.append((ctg_name, s, e)) 
 
         for ctg_name, start, end in candidates:
             utils.logger.info("cand pileup: %s:%d-%d" % (ctg_name, start, end))

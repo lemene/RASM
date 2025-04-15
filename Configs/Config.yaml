@@ -16,14 +16,14 @@ step2:
     block_size: 10000000   # 计算每个block的标准depth值
     cluster_dis: 1000   # 对找到的区间进行一轮聚类
     min_MQ: 0  # 0 for asm   取0的话下面的也要取0
-  apply_clip: true
+  apply_clip: false
   clip_params:
     min_clip_len: 500 # 超过这个长度的认为是异常clip。abnormal clip。需要对hifi数据和ont数据的clip进行一定的统计
     min_clip_portion: 0.35  # 0.25
     min_clip_num: 5   # 超过这个数目，认为是异常区域。与覆盖度有关，需要对覆盖度进行一定的分析
     clip_win_size: 1000 #
     min_MQ: 0  # keep with dp
-  apply_pileup: true
+  apply_pileup: false
   pileup_params:
     reg_size: 1000000
     win_size: 400   # 1000

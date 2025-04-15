@@ -47,7 +47,6 @@ def test(fname):
     #  CP132235.1:1226600-1227600
     for read in bam.fetch("CP132235.1", 1226600, 1227600):
         print(read.qname, read.mapping_quality, read.is_unmapped, read.is_secondary, read.is_supplementary)
-    # return read.is_unmapped or read.is_secondary or read.is_supplementary or read.mapping_quality < mapq
 
 
 
@@ -60,25 +59,38 @@ def main(argv):
     parser.add_argument("-t", "--threads", type=int, default=1)
     parser.add_argument("--work-dir", default=".", help="work directory to output results")
     parser.add_argument("--min-contig", default=20000, type=int)  
-    parser.add_argument("--dump", type=str, help="file for storing intermediate state" )
+    parser.add_argument("--dump", type=str, help="file for storing intermediate state")
+
+    def make_summary(args):
+        smry = summary.Summary(args.bam, args.asm)
+        if args.dump:
+            if not os.path.exists(args.dump) or utils.is_file_newer([args.bam, args.asm], args.dump):
+                smry.scan(args.threads, args.min_contig)
+                smry.save("example.pkl")
+            else:
+                smry.load("example.pkl") 
+
+        else:
+            smry.scan(args.threads, args.min_contig)
+        return smry
 
     try:
         args = parser.parse_args(argv)
 
         if args.command == "detect":
+            smry = make_summary(args)
             detector = dt.Detector(args.config, args.work_dir, args.bam, args.asm)
+            detector.summary = smry
             detector.detect(args.threads, args.min_contig)
         elif args.command == "n50":
             print(n50(args.bam))
         elif args.command == "coverage":
             coverage(args.bam)
         elif args.command == "summary":
-            smry = summary.Summary(args.bam, args.asm)
-            smry.scan(args.threads, args.min_contig)
-            smry.save("example.pkl")
-            #smry.load("example.pkl") 
-            #smry.stat(args.threads)
-            #smry.stat_read()
+
+            smry = make_summary(args)
+
+            smry.stat(args.threads)
 
         elif args.command == "test":
             import clip, pileup, depth

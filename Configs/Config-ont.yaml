@@ -8,6 +8,7 @@
   max_diff_ratio: 0.2     # 插入删除的不一致比例  hifi:0.15, ont:0.2
   check_win_size: 10000 # 10000/8000/6000  / 6000 for hifi   / 10000 for ONT
   min_distance: 0.3
+  contig_block_size: 1000000
 
   min_clip_len: 500 # 超过这个长度的认为是异常clip。abnormal clip。需要对hifi数据和ont数据的clip进行一定的统计
   min_clip_num: 5   # 超过这个数目，认为是异常区域。与覆盖度有关，需要对覆盖度进行一定的分析

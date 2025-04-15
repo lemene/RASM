@@ -36,21 +36,23 @@ class ClipInfo(Feature):
 
         clips =  np.zeros(end - start)
         for read in bam.fetch(ctg_name, start, end):
-            if read.is_unmapped or read.is_secondary or read.mapping_quality < 1:
+            if  read.is_unmapped or read.is_secondary or read.is_supplementary or read.mapping_quality < 1:
                 continue
 
             left = read.cigartuples[0]
+            right = read.cigartuples[-1]
+
             if (left[0] == 4 or left[0] == 5)  and left[1] >= min_clip_len and \
                 read.reference_start >= start and read.reference_start < end:
                 
-                clips[read.reference_start - start] += 1
+                if not ((right[0] == 4 or right[0] == 5) and right[1] >= min_clip_len):
+                    clips[read.reference_start - start] += 1
 
-            right = read.cigartuples[-1]
             if (right[0] == 4 or right[0] == 5) and right[1] >= min_clip_len and \
                 read.reference_end-1 >= start and read.reference_end-1 < end:
 
-                clips[read.reference_end-1 - start] += 1
-
+                if not ((left[0] == 4 or left[0] == 5)  and left[1] >= min_clip_len):
+                    clips[read.reference_end-1 - start] += 1
         return binfo, clips
          
 
@@ -60,8 +62,9 @@ class ClipInfo(Feature):
             compressed = self.compress(clips, win_size, stride)
 
             for c, (s, e) in zip(compressed, utils.WinIterator(len(clips), win_size, stride)):
+                 print(f"clip_s: {ctg_name}-{s}-{e} {c}")
                  if c > min_clip_num:
-                      candidates.append((ctg_name, s, e))
+                     candidates.append((ctg_name, s, e))
                       
         for ctg_name, start, end in candidates:
             utils.logger.info("cand clip: %s:%d-%d" % (ctg_name, start, end))

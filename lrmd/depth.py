@@ -1,14 +1,6 @@
-import os
-import gzip
 from collections import defaultdict
-import itertools
-
 import numpy as np
 import multiprocessing as mp
-
-import utils
-import numpy as np
-
 
 import utils
 from feature import *
@@ -21,20 +13,16 @@ class DepthInfo(Feature):
         self.trough = 0
 
     def build(self, ctgs, smry, threads):
-        
 
         results = []
         pool = mp.Pool(processes=threads)
         for binfo in utils.split_contig_by_block(ctgs):
             (ctg_name, ctg_len, start, end) = binfo
-            
             results.append(pool.apply_async(DepthInfo.collect_depth_in_block, 
                                             args=(binfo, smry.infos[ctg_name][0][:,start:end])))
         pool.close() 
         pool.join()
 
-
-        
         for ctg_name, ctg_len in ctgs:
             self.depths[ctg_name] = np.zeros(ctg_len)
 
@@ -92,31 +80,28 @@ class DepthInfo(Feature):
         for i in range(1,len(smooths)):
             smooths[i] = smooths[i-1] - hist_1000[i-1] + hist_1000[i-1+K]
 
-        mx = np.argmin(smooths)
-        utils.logger.info("first trough of depths: %d" % mx)
-        return median, mx
+        trough = np.argmin(smooths)
+        utils.logger.info("first trough of depths: %d" % trough)
+        return median, trough
 
-    def get_mis_candidates(self, win_size, stride, min_radio, max_radio):
+    def get_mis_candidates(self, win_size, stride):
         candidates = []
         for ctg_name, depth in self.depths.items():
 
             compressed = self.compress(depth, win_size, stride)
 
             for d, (s, e) in zip(compressed, utils.WinIterator(len(depth), win_size, stride)):
-                print(d, min_radio * self.median, max_radio * self.median)
-                if d < min_radio * self.median or d > max_radio * self.median:
+                if d < self.trough:
                     candidates.append((ctg_name, s, e))   
 
         for ctg_name, start, end in candidates:
-            utils.logger.info("cand depth: %s:%d-%d" % (ctg_name, start, end))
+            utils.logger.debug("cand depth: %s:%d-%d" % (ctg_name, start, end))
         return candidates
 
     def compress(self, depth, win_size, stride):
-
         win_iter = utils.WinIterator(len(depth), win_size, stride)
         compressed = [0] * win_iter.size()
 
         for i, (s, e) in enumerate(win_iter):
-            compressed[i] = sum(depth[s:e]) / (e - s)
-
+            compressed[i] = min(depth[s:e])
         return compressed

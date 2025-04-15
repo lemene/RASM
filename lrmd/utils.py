@@ -26,7 +26,7 @@ def enable_logging(log_file="", debug=False, overwrite=True):
 
     logger.setLevel(logging.DEBUG)
 
-enable_logging("")
+enable_logging("", True)
 
 def safe_make_dir(dir):
     if not os.path.isdir(dir):
@@ -50,7 +50,7 @@ def run_samtools_mpileup(bam, output, ctg, ref, mapq):
     cmd = "samtools mpileup -B -q %d -aa -r %s -f %s %s -o %s" % (mapq, ctg, ref, bam, output)
     run_command(cmd)
 
-def split_contig_by_block(ctgs, bsize=5000000):
+def split_contig_by_block(ctgs, bsize=100000):
     for ctg_name, ctg_len in ctgs:
         s = 0
         while s < ctg_len:
@@ -88,3 +88,16 @@ def open_file(fname, mode):
         return gzip.open(fname, mode) 
     else:
         return open(fname, mode)
+    
+
+def is_file_newer(files1, files2):
+    if type(files1) == str:
+        files1_time = os.path.getmtime(files1)
+    else:
+        files1_time = min([os.path.getmtime(f) for f in files1])
+    if type(files2) == str:
+        files2_time = os.path.getmtime(files2)
+    else:
+        files2_time = max([os.path.getmtime(f) for f in files2])
+
+    return files1_time > files1_time

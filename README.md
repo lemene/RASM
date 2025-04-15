@@ -18,6 +18,13 @@ samtools(we use version 1.17)
 mosdepth(https://github.com/brentp/mosdepth)
 ```
 
+## Dependances
+pysam
+pyyaml
+numpy
+scipy
+
+
 ## Quick Start
 ***Before running `LRMD` please do not forget to activate the conda environment.***
 
