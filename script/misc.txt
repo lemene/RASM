@@ -1,0 +1,40 @@
+
+# For test
+# bed1 = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/yeast/simu/hack2/h1_new.bed"
+# bed2 = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/yeast/inspector/structural_error.bed"
+# bed2 = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/yeast/CRAQ/craq_out/runAQI_out/locER_out/out_final.CRE.bed"
+# bed2 = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/yeast/CRAQ/craq_out/runAQI_out/locER_out.bed"
+# bed2 = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/yeast/CRAQ/craq_out/runAQI_out/strER_out.bed"
+# bed2 = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/yeast/CRAQ/craq_out/runAQI_out/test.bed"
+# bed2 = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/yeast/my_pipe/step2_candidate_regions/candidate.bed"
+# bed2 = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/yeast/quast/mis.bed"
+# bed2 = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/yeast/quast/1.bed"
+# bed2 = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/yeast/quast/icarus_viewers/mis.bed" 
+# failed_bed = "/public/home/hpc214712170/Test/mis_detect/simu/My_simu/yeast/ins_failed.bed"
+
+
+# gaep 模拟misassembly类型
+del
+ref: xxxaxxx
+asm: xxxxxx
+
+ins
+ref: xxxxxx
+asm: xxxaxxx
+
+collapsed:
+ref: xxxatAxxx
+asm: xxxaxxx
+
+expanded_3
+ref: xxxatAxxx
+asm: xxxatATAxxx
+
+expanded_4
+ref: xxxatAxxx
+asm: xxxatATATAxxx
+
+inv, A是a的变异和反向，T
+ref: xxxatAxxx
+asm: t互补，atA再反向
+     
