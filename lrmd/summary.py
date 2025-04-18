@@ -34,6 +34,17 @@ class Summary(object):
         ctgs = [(ref, rlen) for ref, rlen in zip(bam.references, bam.lengths) if rlen >= min_contig]
         return ctgs
     
+    def get_contigs0(self):
+        return [(ctg, len(table)) for ctg, (table, _) in self.infos.items()]
+
+
+    def get_contig_length(self, ctg_name):
+        return len(self.infos[ctg_name][0])    
+    
+    def get_average_coverage(self, ctg, start, end):
+        assert start >= 0 and end < self.get_contig_length(ctg) and start < end
+        return np.sum(self.infos[ctg][0][start:end, 0:5]) / (end - start)
+    
     def stat_read(self):
         quals = []
         for ctg, (table, reads) in self.infos.items():
@@ -58,8 +69,7 @@ class Summary(object):
         utils.logger.info("stat_depth")
         self.stat_depth(threads)
 
-        for k in sorted(self.stats.values()):
-            print(k, self.stats[k])
+        for k in sorted(self.stats.keys()):
             utils.logger.info(f"{k} = {self.stats[k]}")
 
     def calc_depth_median(self, hist_1000, hist_gt1000):
@@ -115,34 +125,49 @@ class Summary(object):
         self.stats["depth_trough"] = trough
 
 
+    def stat_table_block(self, ctg, start, end):
+        ref_match, ref_total = 0, 0
+        rd_match, rd_total = 0, 0
+        for t in self.infos[ctg][0][start:end]:
+            s = sum(t[0:8])
+            mx = np.argmax(t[0:7])
+            assert mx != 7
+        
+            if mx == 0:
+                ref_match += 1
+                rd_match += t[0]
+            elif mx >=1 and mx <= 4:
+                rd_match += t[mx]
+            elif mx == 5:               # deletion
+                pass
+            elif mx == 6:               # insertion
+                rd_match += t[7]
+
+            rd_total += sum(t[0:5]) + t[7] 
+
+        ref_total += end - start
+        return (ref_match, ref_total, rd_match, rd_total)
+    
     def stat_table(self, threads):
+        ctgs = self.get_contigs0()
+        segs = utils.split_contig_by_block(ctgs, 1000000)
+
+        results = []
+        pool = mp.Pool(processes=threads)
+        for ctg_name, ctg_len, start, end in segs:
+            results.append(pool.apply_async(ft.partial(self.stat_table_block), args=(ctg_name, start, end)))
 
         ref_match, ref_total = 0, 0
         rd_match, rd_total = 0, 0
-        for ctg, (table, reads) in self.infos.items():
+        for r in results:
+            rfm, rft, rdm, rdt = r.get()
+            ref_match += rfm
+            ref_total += rft
+            rd_match += rdm
+            rd_total += rdt
 
-            for _, t in enumerate(table):
-
-                s = sum(t[0:8])
-                mx = np.argmax(t[0:7])
-                assert mx != 7
-            
-                if mx == 0:
-                    ref_match += 1
-                    rd_match += t[0]
-                elif mx >=1 and mx <= 4:
-                    rd_match += t[mx]
-                elif mx == 5:               # deletion
-                    pass
-                elif mx == 6:               # insertion
-                    rd_match += t[7]
-
-                rd_total += sum(t[0:5]) + t[7] 
-
-            ref_total += len(table)
         self.stats["ref_accu"] = ref_match / ref_total
-        self.stats["read_accu"] = ref_match / rd_total
-
+        self.stats["read_accu"] = rd_match / rd_total
 
     def scan(self, threads, min_contig):
         ctgs = self.get_contigs(min_contig)
@@ -231,7 +256,11 @@ class Summary(object):
                     mismatch += op_len
                 elif op == 4:   # S
                     qpos += op_len
+                    if op_len >= 1000 and rpos >= start and rpos < end:
+                        table[rpos-start, 8] += 1
                 elif op == 5:   # H
+                    if op_len >= 1000 and rpos >= start and rpos < end:
+                        table[rpos-start, 8] += 1
                     pass
                 else:
                     pass        # 不处理

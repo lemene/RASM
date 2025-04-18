@@ -19,6 +19,7 @@ from depth import *
 from pileup import *
 from clip import *
 from summary import *
+from candidate import *
 
 import utils
 
@@ -52,60 +53,56 @@ class Detector:
 
         candidates = []
 
-        win_size = self.cfg["win_size"]
-        stride = self.cfg["stride"]
-        min_clip_len = self.cfg["min_clip_len"]
-        min_mapq = self.cfg["min_mapq"]
-        min_clip_num = self.cfg["min_clip_num"]
-        max_diff_ratio = self.cfg["max_diff_ratio"]
+        self.cfg["threads"] = threads
         
-        if self.cfg['apply_depth']:
-            depth_info = DepthInfo()
-            depth_info.build(ctgs, self.summary, threads)
-            cands = depth_info.get_mis_candidates(win_size, stride)
-            candidates.extend(cands)
-            utils.logger.info("+ depth feature: %d" % len(candidates))
-
-        if self.cfg["apply_clip"]:
-            clip_info = ClipInfo()
-            clip_info.build(ctgs, self.bam_fname, threads, min_clip_len)
-            candidates.extend(clip_info.get_mis_candidates(win_size, stride, min_clip_num))
-            utils.logger.info("+ clip feature: %d" % len(candidates))
-
-        if self.cfg["apply_pileup"]:
-            pileup_info = PileupInfo()
-            pileup_info.build(ctgs, self.summary, threads)
-            candidates.extend(pileup_info.get_mis_candidates(win_size, stride, max_diff_ratio))
-            utils.logger.info("+ pileup feature: %d" % len(candidates))
-
-
-        
+    
+        candidates = Candidate().get_mis_candidates(ctgs, self.summary, self.cfg)
+        utils.logger.info(f"Find candidate {len(candidates)}")
         merged = self.merge_segments(candidates, 5000) if len(candidates) > 0 else []
         
         for ctg_name, start, end in merged:
-            utils.logger.info("merged: %s:%d-%d" % (ctg_name, start, end))
+            utils.logger.debug("merged: %s:%d-%d" % (ctg_name, start, end))
         utils.logger.info("merged candidate size = %d", len(merged))
         
-        misassembly = merged
-        misassembly = self.filter(merged)
+        misassemblies = self.verify_candidates(merged)
 
-        with open(os.path.join(self.wrkdir, "misassembly.bed"), "w") as f:
-            for ctg_name, start, end in misassembly:
-                f.write("%s\t%d\t%d\n" % (ctg_name, start, end))
+        self.dump_misassemblies(os.path.join(self.wrkdir, "misassembly.bed"), misassemblies)
+
 
     def is_read_trivial(self, read, mapq):
         return read.is_unmapped or read.is_secondary or read.is_supplementary or read.mapping_quality < mapq
 
     def is_covering_region(self, ctg, start, end, bam, ref):
         check_win_size = self.cfg["check_win_size"]
+        (lcov, rcov) = self.check_surrounding_region(ctg, start, end)
+        th_cov = max(3, min(lcov, rcov) / 2)
         win_iter = utils.WinIterator(end - start, check_win_size, check_win_size)
         for s, e in win_iter:
             s += start
             e += start
 
-            if not self.is_coverage_win(ctg, s, e, bam, ref):
+            if not self.is_coverage_win(ctg, s, e, bam, ref, th_cov):
                 return False
         return True
+    
+    def check_surrounding_region(self, ctg, start, end):
+        min_mapq = self.cfg["min_mapq"]
+        min_clip_len = self.cfg["min_clip_len"]
+        min_distance = self.cfg["min_distance"]
+
+        start0 = max(0, start - 1000)
+        end1 = min(end+1000, self.summary.get_contig_length(ctg))
+
+        # 计算平均覆盖度
+        lcov = -1   # 表示左边没有区域
+        if start0 + 100 < start:    # 认为超过100才有统计意义
+            lcov = self.summary.get_average_coverage(ctg, start0, start)
+        rcov = -1
+        if end + 100 < end1:
+            rcov = self.summary.get_average_coverage(ctg, end, end1)
+        return lcov, rcov
+        
+
 
     def calc_distance(self, start, end, read, ref):
         rpos = 0 # read.reference_start
@@ -139,7 +136,7 @@ class Detector:
     
 
 
-    def is_coverage_win(self, ctg, start, end, bam, ref):
+    def is_coverage_win(self, ctg, start, end, bam, ref, th_cov):
         
         min_mapq = self.cfg["min_mapq"]
         min_clip_len = self.cfg["min_clip_len"]
@@ -173,22 +170,21 @@ class Detector:
             else:
                 lowqual_num += 1
         
-        print("is_coverage_win: %s:%d-%d %d %d %d" % (ctg, start, end, len(span), lowqual_num, clip_num))
-        return len(span) >= 3 and lowqual_num < min(10, len(span)/2) and clip_num < min(10, len(span)/2) 
-        ##return len(span) >= 3
+        print(f"is_coverage_win: {ctg}:{start}-{end} {len(span)} >= {th_cov} {lowqual_num} {clip_num}")
+        return len(span) >= th_cov
     
 
-    def filter(self, candidates):
-        filtered = []
+    def verify_candidates(self, candidates):
+        verified = []
 
         bam = pysam.AlignmentFile(self.bam_fname, "rb")
         ref = pysam.FastaFile(self.asm_fname)
         for ctg_name, start, end in candidates:
             if not self.is_covering_region(ctg_name, start, end, bam, ref):
-                filtered.append((ctg_name, start, end))
+                verified.append((ctg_name, start, end))
         
-        utils.logger.info("misassembly size = {}".format(len(filtered)))
-        return filtered
+        utils.logger.info("misassembly size = {}".format(len(verified)))
+        return verified
         
 
  
@@ -206,69 +202,7 @@ class Detector:
                 merged.append(list(s))
         return merged
 
-
-def cal_Ne(work_dir, ctg, ctg_len, min_dp, mm_rate):
-    Ne, Na = 0, 0
-    
-    region = ctg + ":" + str(0) + "-" + str(ctg_len)
-    pileup_file = os.path.join(work_dir, "pileup", region + ".pileup.txt")
-    mis_bed = os.path.join(work_dir, "filtered2", region + ".bed")
-    mis_ls = []
-    with open(mis_bed, "r") as f:
-        for line in f:
-            fields = line.strip().split()
-            mis_ls.append([fields[0], int(fields[1]), int(fields[2])])        
-    if len(mis_ls) > 0:
-        mis = mis_ls[0]
-    else:            
-        mis = [ctg, -1, -1]
-    mis_length = 0
-    mis_length += mis[2] - mis[1]
-    mis_idx = 0
-    
-    with open(pileup_file, "r") as f:
-        for line in f:
-            items = line.strip().split("\t")
-            pos = int(items[1])
-            if pos >= mis[1] and pos <= mis[2]: 
-                continue 
-
-            if pos > mis[2]:  # over this mis
-                if mis_idx + 1 < len(mis_ls):
-                    mis_idx += 1
-                    mis = mis_ls[mis_idx]
-                    mis_length += mis[2] - mis[1]
-
-            depth = int(items[3])
-            match = items[4].count('.') + items[4].count(',')
-            if depth >= min_dp:
-                Na += 1
-                if match / depth < mm_rate:
-                    Ne += 1
-    return Ne, Na
-
-def get_qv(work_dir, ctgs, threads):
-
-    simple_file = os.path.join(work_dir, "simple.ststs")
-    f = open(simple_file, "a+")
-    min_dp = 5
-    mm_rate = 0.7   # 根据读数
-    # 
-    results = []
-    pool = mp.Pool(processes=threads)
-    for ctg, ctglen in ctgs:
-        results.append(pool.apply_async(cal_Ne, args=(work_dir, ctg, ctglen, min_dp, mm_rate)))
-
-    pool.close() 
-    pool.join()
-
-    Ne = 0
-    Na = 0
-    for res in results:
-        ctg_Ne, ctg_Na = res.get()
-        Ne += ctg_Ne
-        Na += ctg_Na
-    qv = -10 * math.log10(Ne/Na)
-
-    f.write("QV: {}\n".format(qv))
-    f.close()
+    def dump_misassemblies(self, fname, misassembies):
+        with open(os.path.join(self.wrkdir, "misassembly.bed"), "w") as f:
+            for ctg_name, start, end in misassembies:
+                f.write("%s\t%d\t%d\n" % (ctg_name, start, end))
