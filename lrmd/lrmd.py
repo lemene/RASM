@@ -39,17 +39,6 @@ def coverage(fname):
                 cov[rd.reference_start] += 1
                 cov[rd.reference_end] -= 1
     
-
-
-
-def test(fname):
-    bam = pysam.AlignmentFile(fname, "rb")
-    #  CP132235.1:1226600-1227600
-    for read in bam.fetch("CP132235.1", 1226600, 1227600):
-        print(read.qname, read.mapping_quality, read.is_unmapped, read.is_secondary, read.is_supplementary)
-
-
-
 def main(argv):
     parser = argparse.ArgumentParser(description="detect misassembly")
     parser.add_argument("command", type=str)
@@ -66,9 +55,9 @@ def main(argv):
         if args.dump:
             if not os.path.exists(args.dump) or utils.is_file_newer([args.bam, args.asm], args.dump):
                 smry.scan(args.threads, args.min_contig)
-                smry.save("example.pkl")
+                smry.save(args.dump)
             else:
-                smry.load("example.pkl") 
+                smry.load(args.dump) 
 
         else:
             smry.scan(args.threads, args.min_contig)
@@ -93,23 +82,7 @@ def main(argv):
             smry.stat(args.threads)
 
         elif args.command == "test":
-            import clip, pileup, depth
-            smry = summary.Summary(args.bam, args.asm)
-            smry.load("example.pkl") 
-            
-            bam = pysam.AlignmentFile(args.bam, "rb")
-            ctgs = [(ref, rlen) for ref, rlen in zip(bam.references, bam.lengths) if rlen > args.min_contig]
-            #info = clip.ClipInfo()
-            #info.build(ctgs, args.bam, args.threads, 500)
-            #info.get_mis_candidates(400, 200, 5)
-            
-            # info = pileup.PileupInfo()
-            # info.build(ctgs, smry, args.threads, )
-            # info.get_mis_candidates(400, 200, 0.2)
-
-            info = depth.DepthInfo()
-            info.build(ctgs, smry, args.threads )
-            info.get_mis_candidates(400, 200, 0.15, 1.75)
+            pass
 
     except:
         traceback.print_exc()
