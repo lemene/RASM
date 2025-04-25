@@ -23,7 +23,7 @@ import utils
 
 class Detector:
     def __init__(self, cfg, wrkdir, bam_fname, asm_fname):
-        self.cfg = yaml.safe_load(open(cfg))
+        self.cfg = cfg
         self.wrkdir = wrkdir
         self.bam_fname = bam_fname
         self.asm_fname = asm_fname
@@ -64,24 +64,28 @@ class Detector:
         self.dump_misassemblies(os.path.join(self.wrkdir, "misassembly.bed"), misassemblies)
 
 
-    def is_read_trivial(self, read, mapq):
+    @staticmethod
+    def is_read_trivial(read, mapq):
         #return read.is_unmapped or read.is_secondary or read.is_supplementary or read.mapping_quality < mapq
         return read.is_unmapped or read.is_secondary or read.mapping_quality < mapq
 
-    def is_covering_region(self, ctg, start, end, bam, ref):
-        check_win_size = self.cfg["check_win_size"]
+    @staticmethod
+    def is_covering_region(ctg, start, end, bam, ref):
+        #check_win_size = self.cfg["check_win_size"]
         check_win_size = 5000
-        (lcov, rcov) = self.check_surrounding_region(ctg, start, end)
-        th_cov = max(3, min(lcov, rcov) / 3)
+        #(lcov, rcov) = Detector.check_surrounding_region(ctg, start, end)
+        #th_cov = max(3, min(lcov, rcov) / 3)
+        th_cov = 3
         win_iter = utils.WinIterator(end - start, check_win_size, check_win_size)
         for s, e in win_iter:
             s += start
             e += start
 
-            if not self.is_coverage_win(ctg, s, e, bam, ref, th_cov):
+            if not Detector.is_coverage_win(ctg, s, e, bam, ref, th_cov):
                 return False
         return True
     
+    @staticmethod
     def check_surrounding_region(self, ctg, start, end):
         min_mapq = self.cfg["min_mapq"]
         min_clip_len = self.cfg["min_clip_len"]
@@ -100,8 +104,8 @@ class Detector:
         return lcov, rcov
         
 
-
-    def calc_distance(self, start, end, read, ref):
+    @staticmethod
+    def calc_distance(start, end, read, ref):
         rpos = 0 # read.reference_start
         rseq = ref.fetch(read.reference_name, read.reference_start, read.reference_end)
         distance = np.zeros(len(rseq))
@@ -131,18 +135,19 @@ class Detector:
        
         return sum(distance[start-read.reference_start:end-read.reference_start]) / (end-start)
 
-    def is_coverage_win(self, ctg, start, end, bam, ref, th_cov):
+    @staticmethod
+    def is_coverage_win(ctg, start, end, bam, ref, th_cov):
         
-        min_mapq = self.cfg["min_mapq"]
-        min_clip_len = self.cfg["min_clip_len"]
-        min_distance = self.cfg["min_distance"]
+        min_mapq = 10#self.cfg["min_mapq"]
+        min_clip_len = 500#self.cfg["min_clip_len"]
+        min_distance = 0.3#self.cfg["min_distance"]
 
         span = []
         clip_num = 0
         lowqual_num = 0
         ctg_len = bam.get_reference_length(ctg)
         for read in bam.fetch(ctg, start, end):
-            if (self.is_read_trivial(read, min_mapq)):
+            if (Detector.is_read_trivial(read, min_mapq)):
                 continue
             
             left = read.cigartuples[0]
@@ -157,9 +162,10 @@ class Detector:
                     if read.reference_end > start and  read.reference_end <= end:
                         clip_num += 1
                     continue
-            #utils.logger.info(f"{read.query_name} 2") 
-            if self.calc_distance(start, end, read, ref) < 0.2:
-                if read.reference_start <= max(0, start - 500) and read.reference_end >= min(ctg_len, end + 500):
+            if Detector.calc_distance(start, end, read, ref) < 0.3:
+                sstart, send = max(0, start - 500),  min(ctg_len, end + 500)
+                if (read.reference_start <= sstart or sstart == 0 and read.reference_start < 500)  and \
+                   (read.reference_end >= send or send == ctg_len and send + 500 > ctg_len):
                     span.append(read)
             else:
                 lowqual_num += 1
@@ -167,31 +173,37 @@ class Detector:
         utils.logger.debug(f"is_coverage_win: {ctg}:{start}-{end} {len(span)} >= {th_cov} {lowqual_num} {clip_num}")
         return len(span) >= th_cov
     
-    def verify_candidates_block(self, candidates, threads, i):
+    @staticmethod
+    def verify_candidates_block(bam_fname, asm_fname, candidates, threads, i):
         verified = []
         utils.logger.info(f"start verify {i}/{threads}")
 
-        bam = pysam.AlignmentFile(self.bam_fname, "rb")
-        ref = pysam.FastaFile(self.asm_fname)
-        start = len(candidates) // threads * i
-        end = min(len(candidates), len(candidates) // threads * (i+1))
-        for ctg_name, start, end in candidates[start:end]:
-            if not self.is_covering_region(ctg_name, start, end, bam, ref):
-                verified.append((ctg_name, start, end))
+        bam = pysam.AlignmentFile(bam_fname, "rb")
+        ref = pysam.FastaFile(asm_fname)
+        bsize = (len(candidates) + threads - 1) // threads
+        start = bsize * i
+        end = min(len(candidates), bsize * (i+1))
+        for ctg_name, s, e in candidates[start:end]:
+            utils.logger.info(f"start verify: {ctg_name}:{s}-{e}")
+            if not Detector.is_covering_region(ctg_name, s, e, bam, ref):
+                verified.append((ctg_name, s, e))
         
         utils.logger.info("misassembly size = {}".format(len(verified)))
         return verified
 
     def verify_candidates(self, candidates):
         
+        # threads_data = defaultdict(list)
+        # for c in candidates:
+        #     threads_data[c[0]].append([c. self.summary)
+
         threads = self.cfg["threads"]
         verified = []
-
 
         results = []
         pool = mp.Pool(processes=threads)
         for i in range(threads):
-            results.append(pool.apply_async(ft.partial(self.verify_candidates_block), args=(candidates, threads, i)))
+            results.append(pool.apply_async(Detector.verify_candidates_block, args=(self.bam_fname, self.asm_fname, candidates, threads, i)))
 
         pool.close() 
         pool.join()

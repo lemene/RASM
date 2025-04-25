@@ -3,6 +3,7 @@ import os
 import subprocess
 import gzip
 
+prj_dir = os.path.dirname(os.path.abspath(__file__)) 
 
 logger = logging.getLogger()
 def enable_logging(log_file="", debug=False, overwrite=True):

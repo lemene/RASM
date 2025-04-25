@@ -3,7 +3,7 @@
 import os, sys
 import argparse
 import traceback
-import pysam
+import yaml
 
 import pysam
 import detector as dt
@@ -42,7 +42,7 @@ def coverage(fname):
 def main(argv):
     parser = argparse.ArgumentParser(description="detect misassembly")
     parser.add_argument("command", type=str)
-    parser.add_argument("--config", type=str)
+    parser.add_argument("--config", type=str, default="")
     parser.add_argument("--bam", type=str)
     parser.add_argument("--asm", type=str)
     parser.add_argument("-t", "--threads", type=int, default=1)
@@ -68,7 +68,13 @@ def main(argv):
 
         if args.command == "detect":
             smry = make_summary(args)
-            detector = dt.Detector(args.config, args.work_dir, args.bam, args.asm)
+            if args.config == "":
+                args.config = os.path.join(utils.prj_dir, "..", "config", "default.yaml")
+            
+            config = yaml.safe_load(open(args.config))
+            for k, v in vars(args).items():     # TODO Need to remove the unwanted
+                config[k] = v
+            detector = dt.Detector(config, args.work_dir, args.bam, args.asm)
             detector.summary = smry
             detector.detect(args.threads, args.min_contig)
         elif args.command == "n50":
@@ -76,11 +82,8 @@ def main(argv):
         elif args.command == "coverage":
             coverage(args.bam)
         elif args.command == "summary":
-
             smry = make_summary(args)
-
             smry.stat(args.threads)
-
         elif args.command == "test":
             pass
 
