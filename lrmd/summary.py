@@ -14,12 +14,7 @@ class Summary(object):
         self.bam_fname = bam_fname
         self.asm_fname = asm_fname
         self.infos = {}
-        self.asm_accuracy = 0.0
-        self.read_accuarcy = 0.0
         self.stats = {}
-
-        self.depth_median = 0
-        self.depth_trough = 0
 
     def load(self, fname):
         utils.logger.info("Load intermediate state: %s" % fname)
@@ -36,7 +31,6 @@ class Summary(object):
     
     def get_contigs0(self):
         return [(ctg, len(table)) for ctg, (table, _) in self.infos.items()]
-
 
     def get_contig_length(self, ctg_name):
         return len(self.infos[ctg_name][0])    
@@ -66,8 +60,6 @@ class Summary(object):
         self.stat_read()
         utils.logger.info("stat_table")
         self.stat_table(threads)
-        utils.logger.info("stat_depth")
-        self.stat_depth(threads)
 
         for k in sorted(self.stats.keys()):
             utils.logger.info(f"{k} = {self.stats[k]}")
@@ -84,7 +76,7 @@ class Summary(object):
                 median = d
                 break
         else:
-            for d, c in hist_gt1000.item():
+            for d, c in hist_gt1000.items():
                 accu_m += c
                 if accu_m*2 >= count:
                     median = d
@@ -100,35 +92,16 @@ class Summary(object):
             smooths[i] = smooths[i-1] - hist[i-1] + hist[i-1+K]
 
         return np.argmin(smooths)
-            
-    def stat_depth(self, threads):
-        utils.logger.info("Start stat depth")
 
-        hist_1000 = [0]*1000
-        hist_gt1000 = defaultdict(int)
-        for ctg, (table, reads) in self.infos.items():
-            for t in table:
-                s = int(sum(t[0:5]))
-                if s < len(hist_1000):
-                    hist_1000[s] += 1
-                else:
-                    hist_gt1000[s] += 1
-
-        hist_gt1000 = sorted(hist_gt1000.items(), key=lambda x: x[0])
-
-
-        median = self.calc_depth_median(hist_1000, hist_gt1000)
-        self.stats["depth_median"] = median
-
-        assert median < len(hist_1000)
-        trough = self.calc_depth_trough(hist_1000[0:median])
-        self.stats["depth_trough"] = trough
-
-
-    def stat_table_block(self, ctg, start, end):
+    @staticmethod
+    def stat_table_block(ctg, start, end, table):
+        utils.logger.info(f"start stat_table: {ctg}:{start}-{end}")
         ref_match, ref_total = 0, 0
         rd_match, rd_total = 0, 0
-        for t in self.infos[ctg][0][start:end]:
+        hist_X = np.zeros(1000, dtype=int)
+        hist_gtX = defaultdict(int)
+
+        for t in table:#self.infos[ctg][0][start:end]:
             s = sum(t[0:8])
             mx = np.argmax(t[0:7])
             assert mx != 7
@@ -143,28 +116,55 @@ class Summary(object):
             elif mx == 6:               # insertion
                 rd_match += t[7]
 
+            s = int(sum(t[0:5]))
+            if s < len(hist_X):
+                hist_X[s] += 1
+            else:
+                hist_gtX[s] += 1
+
             rd_total += sum(t[0:5]) + t[7] 
 
         ref_total += end - start
-        return (ref_match, ref_total, rd_match, rd_total)
+        utils.logger.info(f"end stat_table: {ctg}:{start}-{end}")
+
+        return (ref_match, ref_total, rd_match, rd_total, hist_X, hist_gtX)
     
     def stat_table(self, threads):
         ctgs = self.get_contigs0()
-        segs = utils.split_contig_by_block(ctgs, 1000000)
+        segs = utils.split_contig_by_block(ctgs, threads)
 
         results = []
         pool = mp.Pool(processes=threads)
         for ctg_name, ctg_len, start, end in segs:
-            results.append(pool.apply_async(ft.partial(self.stat_table_block), args=(ctg_name, start, end)))
+            results.append(pool.apply_async(Summary.stat_table_block, args=(ctg_name, start, end,self.infos[ctg_name][0][start:end])))
+
+        pool.close() 
+        pool.join()
 
         ref_match, ref_total = 0, 0
         rd_match, rd_total = 0, 0
+        hist_X = np.zeros(1000, dtype=int)
+        hist_gtX = defaultdict(int)
         for r in results:
-            rfm, rft, rdm, rdt = r.get()
+            rfm, rft, rdm, rdt, hx, hgtx = r.get()
             ref_match += rfm
             ref_total += rft
             rd_match += rdm
             rd_total += rdt
+            hist_X += hx
+
+            for k, v in hgtx.items():
+                hist_gtX[k] += v
+
+        hist_gtX = sorted(hist_gtX.items(), key=lambda x: x[0])
+
+
+        median = self.calc_depth_median(hist_X, hist_gtX)
+        self.stats["depth_median"] = median
+
+        assert median < len(hist_X)
+        trough = self.calc_depth_trough(hist_X[0:median])
+        self.stats["depth_trough"] = trough
 
         self.stats["ref_accu"] = ref_match / ref_total
         self.stats["read_accu"] = rd_match / rd_total
@@ -172,7 +172,7 @@ class Summary(object):
     def scan(self, threads, min_contig):
         ctgs = self.get_contigs(min_contig)
         
-        segs = utils.split_contig_by_block(ctgs)
+        segs = utils.split_contig_by_block(ctgs, threads)
 
         results = []
         pool = mp.Pool(processes=threads)

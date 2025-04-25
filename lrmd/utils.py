@@ -26,7 +26,7 @@ def enable_logging(log_file="", debug=False, overwrite=True):
 
     logger.setLevel(logging.DEBUG)
 
-enable_logging("", True)
+enable_logging("llog", True)
 
 def safe_make_dir(dir):
     if not os.path.isdir(dir):
@@ -50,11 +50,17 @@ def run_samtools_mpileup(bam, output, ctg, ref, mapq):
     cmd = "samtools mpileup -B -q %d -aa -r %s -f %s %s -o %s" % (mapq, ctg, ref, bam, output)
     run_command(cmd)
 
-def split_contig_by_block(ctgs, bsize=100000):
+def split_contig_by_block(ctgs, threads):
+    tlen = sum([ctg_len for _, ctg_len in ctgs])
+    bsize = max(tlen // (threads *2), 500000)
+
     for ctg_name, ctg_len in ctgs:
         s = 0
         while s < ctg_len:
-            e = min(s+bsize, ctg_len)
+            if s + bsize*1.5 < ctg_len:
+                e = s + bsize
+            else:
+                e = ctg_len
             yield ctg_name, ctg_len, s, e
             s = e
     return

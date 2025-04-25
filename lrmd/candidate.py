@@ -3,7 +3,6 @@ import numpy as np
 import multiprocessing as mp
 
 import utils
-from feature import *
 
 class Candidate(object):
             
@@ -13,9 +12,10 @@ class Candidate(object):
         self.trough = 0
 
     def get_mis_candidates(self, ctgs, smry, cfg):
+        threads = cfg["threads"]
         results = []
-        pool = mp.Pool(processes=cfg["threads"])
-        for binfo in utils.split_contig_by_block(ctgs):
+        pool = mp.Pool(processes=threads)
+        for binfo in utils.split_contig_by_block(ctgs, threads):
             utils.logger.info(f"{binfo}")
             ctg_name, ctg_len, start, end = binfo
             results.append(pool.apply_async(Candidate.collect_in_block, 

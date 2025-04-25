@@ -15,9 +15,6 @@ from functools import partial
 from collections import namedtuple,defaultdict, Counter
 
 
-from depth import *
-from pileup import *
-from clip import *
 from summary import *
 from candidate import *
 
@@ -44,9 +41,7 @@ class Detector:
         bam = pysam.AlignmentFile(self.bam_fname, "rb")
         ctgs = [(ref, rlen) for ref, rlen in zip(bam.references, bam.lengths) if rlen >= min_contig]
         return ctgs
-    
 
-    
     def detect(self, threads, min_contig):
         bam = pysam.AlignmentFile(self.bam_fname, "rb")
         ctgs = [(ref, rlen) for ref, rlen in zip(bam.references, bam.lengths) if rlen >= min_contig]
@@ -55,7 +50,6 @@ class Detector:
 
         self.cfg["threads"] = threads
         
-    
         candidates = Candidate().get_mis_candidates(ctgs, self.summary, self.cfg)
         utils.logger.info(f"Find candidate {len(candidates)}")
         merged = self.merge_segments(candidates, 5000) if len(candidates) > 0 else []
@@ -64,18 +58,21 @@ class Detector:
             utils.logger.debug("merged: %s:%d-%d" % (ctg_name, start, end))
         utils.logger.info("merged candidate size = %d", len(merged))
         
+        #merged = [("contig_5", 34400, 35000)]
         misassemblies = self.verify_candidates(merged)
 
         self.dump_misassemblies(os.path.join(self.wrkdir, "misassembly.bed"), misassemblies)
 
 
     def is_read_trivial(self, read, mapq):
-        return read.is_unmapped or read.is_secondary or read.is_supplementary or read.mapping_quality < mapq
+        #return read.is_unmapped or read.is_secondary or read.is_supplementary or read.mapping_quality < mapq
+        return read.is_unmapped or read.is_secondary or read.mapping_quality < mapq
 
     def is_covering_region(self, ctg, start, end, bam, ref):
         check_win_size = self.cfg["check_win_size"]
+        check_win_size = 5000
         (lcov, rcov) = self.check_surrounding_region(ctg, start, end)
-        th_cov = max(3, min(lcov, rcov) / 2)
+        th_cov = max(3, min(lcov, rcov) / 3)
         win_iter = utils.WinIterator(end - start, check_win_size, check_win_size)
         for s, e in win_iter:
             s += start
@@ -133,8 +130,6 @@ class Detector:
         
        
         return sum(distance[start-read.reference_start:end-read.reference_start]) / (end-start)
-    
-
 
     def is_coverage_win(self, ctg, start, end, bam, ref, th_cov):
         
@@ -149,8 +144,7 @@ class Detector:
         for read in bam.fetch(ctg, start, end):
             if (self.is_read_trivial(read, min_mapq)):
                 continue
-
-            cigar = read.cigartuples
+            
             left = read.cigartuples[0]
             if left[0] == 4 or left[0] == 5:
                 if min(left[1], read.reference_start) > min_clip_len:
@@ -163,29 +157,52 @@ class Detector:
                     if read.reference_end > start and  read.reference_end <= end:
                         clip_num += 1
                     continue
-            
+            #utils.logger.info(f"{read.query_name} 2") 
             if self.calc_distance(start, end, read, ref) < 0.2:
                 if read.reference_start <= max(0, start - 500) and read.reference_end >= min(ctg_len, end + 500):
                     span.append(read)
             else:
                 lowqual_num += 1
         
-        print(f"is_coverage_win: {ctg}:{start}-{end} {len(span)} >= {th_cov} {lowqual_num} {clip_num}")
+        utils.logger.debug(f"is_coverage_win: {ctg}:{start}-{end} {len(span)} >= {th_cov} {lowqual_num} {clip_num}")
         return len(span) >= th_cov
     
-
-    def verify_candidates(self, candidates):
+    def verify_candidates_block(self, candidates, threads, i):
         verified = []
+        utils.logger.info(f"start verify {i}/{threads}")
 
         bam = pysam.AlignmentFile(self.bam_fname, "rb")
         ref = pysam.FastaFile(self.asm_fname)
-        for ctg_name, start, end in candidates:
+        start = len(candidates) // threads * i
+        end = min(len(candidates), len(candidates) // threads * (i+1))
+        for ctg_name, start, end in candidates[start:end]:
             if not self.is_covering_region(ctg_name, start, end, bam, ref):
                 verified.append((ctg_name, start, end))
         
         utils.logger.info("misassembly size = {}".format(len(verified)))
         return verified
+
+    def verify_candidates(self, candidates):
         
+        threads = self.cfg["threads"]
+        verified = []
+
+
+        results = []
+        pool = mp.Pool(processes=threads)
+        for i in range(threads):
+            results.append(pool.apply_async(ft.partial(self.verify_candidates_block), args=(candidates, threads, i)))
+
+        pool.close() 
+        pool.join()
+
+        for r in results:
+            print(r.get())
+            verified.extend(r.get())
+        
+        utils.logger.info("misassembly size = {}".format(len(verified)))
+        return verified
+
 
  
     def merge_segments(self, segs, distance):
