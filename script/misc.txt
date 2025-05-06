@@ -23,6 +23,7 @@ ref: xxxxxx
 asm: xxxaxxx
 
 collapsed:
+old_ref:xxxatxxx
 ref: xxxatAxxx
 asm: xxxaxxx
 
@@ -35,6 +36,7 @@ ref: xxxatAxxx
 asm: xxxatATATAxxx
 
 inv, A是a的变异和反向，T
-ref: xxxatAxxx
-asm: t互补，atA再反向
+oref: xxxatxxx
+ ref: xxxatAxxx
+ asm: t互补，atA再反向
      

@@ -68,11 +68,7 @@ def md_simu_mis(argv):
         safe_run(cmd)
 
         # 
-        with open("mis_asm.bed", "w") as f:
-            for i, line in enumerate(open("misassembly.bed")):
-                if i % 4 == 3:
-                    its = line.split()
-                    f.write("%s %s %s\n" % (its[2], its[-2], its[-1]))
+        get_mis_from_gaep("misassembly.bed", "mis_asm.bed")
 
     except:
         traceback.print_exc()
@@ -122,6 +118,32 @@ def md_simu_reads(argv):
         else:
             pass
 
+    except:
+        traceback.print_exc()
+        print("----------------")
+        print(parser.usage)
+
+
+def get_mis_from_gaep(ifname, ofname):
+    with open(ofname, "w") as f:
+        for i, line in enumerate(open(ifname)):
+            its = line.split()
+            if its[3] == "del" or its[3] == "ins":
+                f.write("%s %s %s\n" % (its[2], its[-2], its[-1]))
+            elif its[3] == "inv":
+
+            if i % 4 == 3:
+                its = line.split()
+
+def md_get_mis_from_gaep(argv):
+    '''collect misassemblies from gaep output'''
+    parser = argparse.ArgumentParser(description=md_simu_mis.__doc__)
+    parser.add_argument("ifname", type=str)
+    parser.add_argument("ofname", type=str)
+
+    try:
+        args = parser.parse_args(argv)
+        get_mis_from_gaep(args.ifname, args.ofname)
     except:
         traceback.print_exc()
         print("----------------")

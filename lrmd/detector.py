@@ -19,6 +19,12 @@ from summary import *
 from candidate import *
 
 import utils
+from enum import Enum
+
+class RegionType(Enum):
+    NORMAL = 0      # 正常区域
+    ERROR = 1       # 组装错误
+    WARNING = 2     # 疑似错误
 
 
 class Detector:
@@ -70,7 +76,7 @@ class Detector:
         return read.is_unmapped or read.is_secondary or read.mapping_quality < mapq
 
     @staticmethod
-    def is_covering_region(ctg, start, end, bam, ref):
+    def detect_region_type(ctg, start, end, bam, ref):
         #check_win_size = self.cfg["check_win_size"]
         check_win_size = 5000
         #(lcov, rcov) = Detector.check_surrounding_region(ctg, start, end)
@@ -80,10 +86,10 @@ class Detector:
         for s, e in win_iter:
             s += start
             e += start
-
-            if not Detector.is_coverage_win(ctg, s, e, bam, ref, th_cov):
-                return False
-        return True
+            t = Detector.detect_win_type(ctg, s, e, bam, ref, th_cov)
+            if t != RegionType.NORMAL:
+                return t
+        return RegionType.NORMAL
     
     @staticmethod
     def check_surrounding_region(self, ctg, start, end):
@@ -136,7 +142,7 @@ class Detector:
         return sum(distance[start-read.reference_start:end-read.reference_start]) / (end-start)
 
     @staticmethod
-    def is_coverage_win(ctg, start, end, bam, ref, th_cov):
+    def detect_win_type(ctg, start, end, bam, ref, th_cov):
         
         min_mapq = 10#self.cfg["min_mapq"]
         min_clip_len = 500#self.cfg["min_clip_len"]
@@ -145,11 +151,12 @@ class Detector:
         span = []
         clip_num = 0
         lowqual_num = 0
+        cov = 0
         ctg_len = bam.get_reference_length(ctg)
         for read in bam.fetch(ctg, start, end):
             if (Detector.is_read_trivial(read, min_mapq)):
                 continue
-            
+            cov += 1
             left = read.cigartuples[0]
             if left[0] == 4 or left[0] == 5:
                 if min(left[1], read.reference_start) > min_clip_len:
@@ -170,8 +177,13 @@ class Detector:
             else:
                 lowqual_num += 1
         
-        utils.logger.debug(f"is_coverage_win: {ctg}:{start}-{end} {len(span)} >= {th_cov} {lowqual_num} {clip_num}")
-        return len(span) >= th_cov
+        utils.logger.debug(f"detect_win_type: {ctg}:{start}-{end} {len(span)} >= {th_cov} {lowqual_num} {clip_num}")
+        if len(span) < th_cov:
+            return RegionType.ERROR
+        elif clip_num >= cov // 3 or lowqual_num > cov // 3:
+            return RegionType.WARNING
+        else:
+            return RegionType.NORMAL
     
     @staticmethod
     def verify_candidates_block(bam_fname, asm_fname, candidates, threads, i):
@@ -185,8 +197,9 @@ class Detector:
         end = min(len(candidates), bsize * (i+1))
         for ctg_name, s, e in candidates[start:end]:
             utils.logger.info(f"start verify: {ctg_name}:{s}-{e}")
-            if not Detector.is_covering_region(ctg_name, s, e, bam, ref):
-                verified.append((ctg_name, s, e))
+            t = Detector.detect_region_type(ctg_name, s, e, bam, ref)
+            if t != RegionType.NORMAL:
+                verified.append((ctg_name, s, e, t))
         
         utils.logger.info("misassembly size = {}".format(len(verified)))
         return verified
@@ -233,5 +246,5 @@ class Detector:
 
     def dump_misassemblies(self, fname, misassembies):
         with open(os.path.join(self.wrkdir, "misassembly.bed"), "w") as f:
-            for ctg_name, start, end in misassembies:
-                f.write("%s\t%d\t%d\n" % (ctg_name, start, end))
+            for ctg_name, start, end, type in misassembies:
+                f.write("%s\t%d\t%d\t%d\n" % (ctg_name, start, end, type.value))

@@ -108,3 +108,4 @@ def is_file_newer(files1, files2):
         files2_time = max([os.path.getmtime(f) for f in files2])
 
     return files1_time > files1_time
+
