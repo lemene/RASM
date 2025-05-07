@@ -22,7 +22,7 @@ ins
 ref: xxxxxx
 asm: xxxaxxx
 
-collapsed:
+collasped:
 old_ref:xxxatxxx
 ref: xxxatAxxx
 asm: xxxaxxx

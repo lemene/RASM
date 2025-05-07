@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
  
-import sys,os
+import sys, os
 import traceback
 import gzip
 import logging
 import multiprocessing
 import argparse
+
 
 
 def safe_run(cmd):
@@ -127,13 +128,23 @@ def md_simu_reads(argv):
 def get_mis_from_gaep(ifname, ofname):
     with open(ofname, "w") as f:
         for i, line in enumerate(open(ifname)):
+            if i % 4 != 3: continue
             its = line.split()
+            print(its)
             if its[3] == "del" or its[3] == "ins":
                 f.write("%s %s %s\n" % (its[2], its[-2], its[-1]))
             elif its[3] == "inv":
+                f.write("%s %s %s\n" % (its[2], its[-4], its[-3]))
+            elif its[3] == "collasped":
+                f.write("%s %s %s\n" % (its[2], its[-4], its[-3]))
+            elif its[3] == "expanded_3":
+                f.write("%s %s %s\n" % (its[2], its[-4], its[-3]))
+            elif its[3] == "expanded_4":
+                f.write("%s %s %s\n" % (its[2], its[-4], its[-3]))
+            else:
+                print(f"{its[3]}")
+                assert not "never come here"
 
-            if i % 4 == 3:
-                its = line.split()
 
 def md_get_mis_from_gaep(argv):
     '''collect misassemblies from gaep output'''

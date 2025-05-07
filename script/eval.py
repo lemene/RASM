@@ -57,7 +57,6 @@ class Compare(object):
             self.compare(bed_truth, bed_test, threshold, bias)
 
     def compare(self, bed_truth, bed_test, threshold:int, bias:int):
-
         result_truth = [0] * len(bed_truth)
         result_test = [0] * len(bed_test)
         pairs = []
@@ -74,7 +73,7 @@ class Compare(object):
         if truth[0] == test[0]:
             assert truth[2] >= truth[1] and test[2] >= test[1]
             inter = min(truth[2], test[2]) - max(truth[1], test[1])
-            #return inter / (truth[2] - truth[1]) > cov or inter /(test[2] - test[1]) > cov
+            print(truth, test, min(truth[2], test[2]) , max(truth[1], test[1]), inter + bias > 0)
             return inter + bias > 0
         else:
             return False
@@ -127,7 +126,7 @@ if __name__ == "__main__":
     parser.add_argument("test", type=str)
     parser.add_argument("--truth_type", type=str, default="gaep")
     parser.add_argument("--threshold", type=float, default=0.4)
-    parser.add_argument("--bias", type=int, default=0)
+    parser.add_argument("--bias", type=int, default=500)
     parser.add_argument("--detail", action="store_true", default=False)
 
 

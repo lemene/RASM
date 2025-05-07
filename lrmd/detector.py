@@ -181,6 +181,7 @@ class Detector:
         if len(span) < th_cov:
             return RegionType.ERROR
         elif clip_num >= cov // 3 or lowqual_num > cov // 3:
+            utils.logger.debug(f"detect_win_type(WARNING): {ctg}:{start}-{end} {clip_num} >= {cov} {lowqual_num} > {cov}")
             return RegionType.WARNING
         else:
             return RegionType.NORMAL
